@@ -1,0 +1,164 @@
+{
+  "trading_pairs": [
+    {
+      "pair": "BTC-USD",
+      "weight": 0.30,
+      "precision": 6
+    },
+    {
+      "pair": "ETH-USD",
+      "weight": 0.25,
+      "precision": 5
+    },
+    {
+      "pair": "AVAX-USD",
+      "weight": 0.15,
+      "precision": 4
+    },
+    {
+      "pair": "UNI-USD",
+      "weight": 0.15,
+      "precision": 4
+    },
+    {
+      "pair": "MATIC-USD",
+      "weight": 0.15,
+      "precision": 3
+    }
+  ],
+  "pair_filters": {
+    "min_24h_volume": 1000000,
+    "min_price": 1.0,
+    "max_spread": 0.005,
+    "exclude": [
+      "*-USDC",
+      "*-USDT",
+      "USDC-*",
+      "USDT-*",
+      "DAI-*"
+    ]
+  },
+  "dynamic_weights": {
+    "max_pairs": 5,
+    "rebalance_interval": 300,
+    "min_weight": 0.15,
+    "max_weight": 0.30
+  },
+  "paper_trading": true,
+  "initial_capital": 230.0,
+  "target_capital": 460.0,
+  "days_target": 90,
+  "portfolio": {
+    "max_leverage": 1.5,
+    "rebalance_interval": 300,
+    "correlation_threshold": 0.7
+  },
+  
+  "risk_management": {
+    "max_position_size": 0.30,
+    "max_daily_loss": 0.05,
+    "max_drawdown": 0.15,
+    "stop_loss_pct": 0.02,
+    "trailing_stop_pct": 0.01,
+    "take_profit_pct": 0.04
+  },
+
+  "strategy": {
+    "indicators": {
+      "rsi": {
+        "period": 14,
+        "overbought": 70,
+        "oversold": 35,
+        "extreme_overbought": 80,
+        "extreme_oversold": 20,
+        "volatility_adjustment": {
+          "low_vol": {
+            "overbought": 65,
+            "oversold": 40
+          },
+          "high_vol": {
+            "overbought": 75,
+            "oversold": 30
+          }
+        }
+      },
+      "macd": {
+        "fast_period": 12,
+        "slow_period": 26,
+        "signal_period": 9,
+        "min_hist": 0.0001,
+        "max_hist": 0.05,
+        "trend_confirmation": {
+          "min_candles": 3,
+          "required_ratio": 0.75
+        }
+      },
+      "volume": {
+        "period": 20,
+        "min_increase": 1.5,
+        "spike_threshold": 2.0,
+        "sustained_threshold": 1.2
+      },
+      "correlation": {
+        "max_pair_correlation": 0.7,
+        "cluster_size": 3,
+        "rebalance_threshold": 0.1
+      }
+    },
+    "entry_rules": {
+      "min_volume_percentile": 60,
+      "min_volatility": 0.001,
+      "max_volatility": 0.015,
+      "trend_candles": 12,
+      "min_price_increase": 0.002,
+      "trend_confirmation": {
+        "required_indicators": 3,
+        "min_agreement": 0.75
+      },
+      "correlation_filters": {
+        "max_cluster_weight": 0.5,
+        "min_diversification": 0.3
+      },
+      "market_regime_adjustments": {
+        "trending_volatile": {
+          "price_increase_multiplier": 1.5,
+          "volatility_multiplier": 1.2
+        },
+        "ranging_volatile": {
+          "price_increase_multiplier": 0.8,
+          "volatility_multiplier": 0.8
+        },
+        "trending_stable": {
+          "price_increase_multiplier": 1.2,
+          "volatility_multiplier": 1.0
+        },
+        "ranging_stable": {
+          "price_increase_multiplier": 0.9,
+          "volatility_multiplier": 0.9
+        }
+      }
+    },
+    "time_filters": {
+      "trading_hours": {
+        "start": "00:00",
+        "end": "23:59"
+      },
+      "min_candles": 30,
+      "lookback_minutes": 240,
+      "candle_minutes": 5
+    }
+  },
+
+  "execution": {
+    "candle_interval": 5,
+    "base_order_size": 50.0,
+    "max_slippage": 0.001,
+    "default_precision": 8
+  },
+
+  "logging": {
+    "level": "INFO",
+    "file": "trading_bot.log",
+    "performance_interval": 300
+  }
+}
