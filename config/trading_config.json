@@ -1,0 +1,17 @@
+{
+    "trading_params": {
+        "max_position_size": 0.01,
+        "stop_loss_pct": 2.0,
+        "take_profit_pct": 3.0,
+        "max_trades_per_day": 5,
+        "min_volume_24h": 1000000
+    },
+    "exchange_settings": {
+        "exchange_id": "binance",
+        "base_currency": "USDT",
+        "trading_pairs": ["BTC/USDT", "ETH/USDT"],
+        "order_type": "limit",
+        "position_type": "spot",
+        "timeout": 30000
+    }
+}

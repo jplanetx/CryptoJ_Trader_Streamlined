@@ -41,7 +41,10 @@ trades.log
 # Local Configuration
 .env
 config/local.json
-cdp_api_key.json
+config/cdp_api_key.json  # Coinbase CDP API key file
+config/*.key
+config/*.pem
+config/secrets/
 
 # Dependencies
 vendor/*.whl

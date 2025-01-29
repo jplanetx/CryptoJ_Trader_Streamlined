@@ -1,7 +1,112 @@
 # Minimal Implementation Plan: Fast Track to Live Trading
 
 ## Overview
-This streamlined plan focuses on getting to live trading quickly with a minimal viable system. Additional features can be added after successful live trading is established.
+This streamlined plan focuses on getting to live trading quickly with a minimal viable system. Each implementation step will be followed by a code review to ensure quality and completeness.
+
+## Implementation and Review Process
+
+### Update Logging
+Each implementation or review must create an update log in the Updates directory with these requirements:
+
+1. File Location:
+   ```
+   C:\Projects\CryptoJ_Trader_New\Updates\update_log_[YYYYMMDD_HHMM].txt
+   ```
+
+2. Timestamp Rules:
+   - Use the actual file creation time for the timestamp
+   - Use 24-hour military time format
+   - Example: If creating file at 2:45 PM on January 28, 2025, name it:
+     `update_log_20250128_1445.txt`
+
+3. Log Format:
+   ```
+   # Implementation Update Log
+   Date: [YYYY-MM-DD]
+   Time: [HH:MM] (24-hour format)
+   Step: [Module.Step number]
+   Status: [Completed/In Progress/Review Required]
+
+   Changes Made:
+   - [List of specific changes]
+
+   Validation:
+   - [List of validation steps completed]
+
+   Next Steps:
+   - [List of next steps if any]
+   ```
+
+### Code Review Process
+Reviews must follow these requirements:
+
+1. File Location and Naming:
+   - Create review in Updates directory
+   - Use actual timestamp of review creation
+   - Format: `update_log_[YYYYMMDD_HHMM].txt`
+
+2. Review Template:
+   ```
+   Role: You are Roo, a code review specialist focused on minimal viable implementations.
+
+   Task:
+   1. Review implementation of [Module.Step]
+   2. Verify completion criteria
+   3. Validate changes against requirements
+   4. Check for potential issues
+   5. Provide specific feedback
+
+   Context:
+   - Implementation step: [Module.Step]
+   - Update log to review: [Full path to implementation log]
+   - Focus on minimal viable requirements
+   - Verify security and stability
+
+   Important:
+   - Create review log in: C:\Projects\CryptoJ_Trader_New\Updates\
+   - Use actual creation time for timestamp
+   - Match log header time to filename
+   - Example: If reviewing at 15:10, name file update_log_20250128_1510.txt
+
+   Review Format:
+   # Implementation Review Report
+   Date: [YYYY-MM-DD]
+   Time: [HH:MM] (24-hour format)
+   Module: [Number]
+   Step: [Number]
+
+   ### Review Summary
+   - Overall Status: [Complete/Incomplete/Needs Revision]
+   - Critical Issues: [Yes/No]
+   - Documentation Status: [Complete/Incomplete]
+
+   ### Detailed Findings
+   1. Code Quality
+      - [Specific observations]
+      - [Recommendations]
+
+   2. Functionality
+      - [Verification results]
+      - [Issues found]
+
+   3. Error Handling
+      - [Coverage assessment]
+      - [Improvement needs]
+
+   4. Documentation
+      - [Completeness check]
+      - [Clarity assessment]
+
+   ### Recommendations
+   1. [Specific recommendation]
+   2. [Specific recommendation]
+   3. [Specific recommendation]
+
+   ### Next Steps
+   1. [Required action]
+   2. [Required action]
+   3. [Required action]
+   ```
 
 ## Module 1: Clean Setup (Day 1)
 
@@ -28,8 +133,17 @@ Best Practices:
 - Verify core functionality
 - Document changes made
 
-End with update_log_[YYYYMMDD_HHMM].txt
+Output Requirements:
+1. Create log in: C:\Projects\CryptoJ_Trader_New\Updates\
+2. Use actual creation time for timestamp (24-hour format)
+3. Example: If completing work at 14:30, name file update_log_20250128_1430.txt
+4. Ensure log header timestamp matches filename
+
+End with update log following the format above.
 ```
+
+**Review Checkpoint**:
+After completing Step 1.1, use the review template above to conduct a thorough review before proceeding.
 
 ### Step 1.2: Core Configuration
 **Thread**: Code
@@ -54,9 +168,18 @@ Best Practices:
 - Document all settings
 - Test configuration loading
 
+Output Requirements:
+1. Create log in: C:\Projects\CryptoJ_Trader_New\Updates\
+2. Use actual creation time for timestamp (24-hour format)
+3. Example: If completing work at 14:30, name file update_log_20250128_1430.txt
+4. Ensure log header timestamp matches filename
+
 Review Step 1.1 update before starting.
-End with update_log_[YYYYMMDD_HHMM].txt
+End with update log following the format above.
 ```
+
+**Review Checkpoint**:
+After completing Step 1.2, use the review template to conduct a thorough review before proceeding.
 
 ## Module 2: Core Implementation (Day 2)
 
@@ -83,9 +206,18 @@ Best Practices:
 - Add clear error handling
 - Test each component
 
+Output Requirements:
+1. Create log in: C:\Projects\CryptoJ_Trader_New\Updates\
+2. Use actual creation time for timestamp (24-hour format)
+3. Example: If completing work at 14:30, name file update_log_20250128_1430.txt
+4. Ensure log header timestamp matches filename
+
 Review previous updates before starting.
-End with update_log_[YYYYMMDD_HHMM].txt
+End with update log following the format above.
 ```
+
+**Review Checkpoint**:
+After completing Step 2.1, use the review template to conduct a thorough review before proceeding.
 
 ### Step 2.2: Market Data
 **Thread**: Code
@@ -110,9 +242,18 @@ Best Practices:
 - Log important events
 - Verify data accuracy
 
+Output Requirements:
+1. Create log in: C:\Projects\CryptoJ_Trader_New\Updates\
+2. Use actual creation time for timestamp (24-hour format)
+3. Example: If completing work at 14:30, name file update_log_20250128_1430.txt
+4. Ensure log header timestamp matches filename
+
 Review previous updates before starting.
-End with update_log_[YYYYMMDD_HHMM].txt
+End with update log following the format above.
 ```
+
+**Review Checkpoint**:
+After completing Step 2.2, use the review template to conduct a thorough review before proceeding.
 
 ## Module 3: Testing (Day 3)
 
@@ -139,9 +280,18 @@ Best Practices:
 - Ensure proper mocking
 - Document test coverage
 
+Output Requirements:
+1. Create log in: C:\Projects\CryptoJ_Trader_New\Updates\
+2. Use actual creation time for timestamp (24-hour format)
+3. Example: If completing work at 14:30, name file update_log_20250128_1430.txt
+4. Ensure log header timestamp matches filename
+
 Review previous updates before starting.
-End with update_log_[YYYYMMDD_HHMM].txt
+End with update log following the format above.
 ```
+
+**Review Checkpoint**:
+After completing Step 3.1, use the review template to conduct a thorough review before proceeding.
 
 ## Module 4: Paper Trading (Day 4-5)
 
@@ -168,9 +318,18 @@ Best Practices:
 - Monitor system state
 - Document procedures
 
+Output Requirements:
+1. Create log in: C:\Projects\CryptoJ_Trader_New\Updates\
+2. Use actual creation time for timestamp (24-hour format)
+3. Example: If completing work at 14:30, name file update_log_20250128_1430.txt
+4. Ensure log header timestamp matches filename
+
 Review previous updates before starting.
-End with update_log_[YYYYMMDD_HHMM].txt
+End with update log following the format above.
 ```
+
+**Review Checkpoint**:
+After completing Step 4.1, use the review template to conduct a thorough review before proceeding.
 
 ### Step 4.2: Paper Trading Validation
 **Thread**: Architect
@@ -196,9 +355,18 @@ Best Practices:
 - Document any issues
 - Make clear recommendations
 
+Output Requirements:
+1. Create log in: C:\Projects\CryptoJ_Trader_New\Updates\
+2. Use actual creation time for timestamp (24-hour format)
+3. Example: If completing work at 14:30, name file update_log_20250128_1430.txt
+4. Ensure log header timestamp matches filename
+
 Review all previous updates before starting.
-End with update_log_[YYYYMMDD_HHMM].txt
+End with update log following the format above.
 ```
+
+**Review Checkpoint**:
+After completing Step 4.2, use the review template to conduct a thorough review before proceeding.
 
 ## Module 5: Live Trading (Week 2)
 
@@ -225,9 +393,18 @@ Best Practices:
 - Verify safety measures
 - Document all steps
 
+Output Requirements:
+1. Create log in: C:\Projects\CryptoJ_Trader_New\Updates\
+2. Use actual creation time for timestamp (24-hour format)
+3. Example: If completing work at 14:30, name file update_log_20250128_1430.txt
+4. Ensure log header timestamp matches filename
+
 Review all previous updates before starting.
-End with update_log_[YYYYMMDD_HHMM].txt
+End with update log following the format above.
 ```
+
+**Review Checkpoint**:
+After completing Step 5.1, use the review template to conduct a thorough review before proceeding.
 
 ### Step 5.2: Live Launch
 **Thread**: Architect
@@ -253,9 +430,18 @@ Best Practices:
 - Document all events
 - Stay ready for issues
 
+Output Requirements:
+1. Create log in: C:\Projects\CryptoJ_Trader_New\Updates\
+2. Use actual creation time for timestamp (24-hour format)
+3. Example: If completing work at 14:30, name file update_log_20250128_1430.txt
+4. Ensure log header timestamp matches filename
+
 Review all previous updates before starting.
-End with update_log_[YYYYMMDD_HHMM].txt
+End with update log following the format above.
 ```
+
+**Review Checkpoint**:
+After completing Step 5.2, use the review template to conduct a thorough review before proceeding.
 
 ## Success Criteria
 1. System executes trades reliably
@@ -275,3 +461,4 @@ End with update_log_[YYYYMMDD_HHMM].txt
 - Validate each step thoroughly
 - Document all changes
 - Don't add complexity until live trading is stable
+- Complete review process after each step
