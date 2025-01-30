@@ -2,7 +2,7 @@ import pytest
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from crypto_j_trader.src.trading.trading_core import PortfolioManager
+from crypto_j_trader.src.trading.portfolio_manager import PortfolioManager
 
 @pytest.fixture
 def test_config():

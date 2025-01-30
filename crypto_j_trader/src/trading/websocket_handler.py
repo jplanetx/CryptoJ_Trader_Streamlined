@@ -1,147 +1,128 @@
-import asyncio
-import json
+"""WebSocket handler for market data streaming"""
 import logging
-import websockets
-from typing import Dict, Optional, Callable, Any
+import json
+import asyncio
 from datetime import datetime
+from typing import Dict, Any, Optional, Callable, Coroutine, Union
+import websockets
 
 logger = logging.getLogger(__name__)
 
 class WebSocketHandler:
-    """Handles real-time market data via WebSocket connection"""
+    """Handles WebSocket connections for market data"""
     
-    def __init__(self, config: Dict[str, Any]):
-        """Initialize WebSocket handler with configuration"""
-        self.config = config
-        self.ws: Optional[websockets.WebSocketClientProtocol] = None
-        self.callbacks: Dict[str, Callable] = {}
-        self.subscribed_pairs: set = set()
-        self.last_message_time: Optional[datetime] = None
-        self.reconnect_delay = 1  # Initial reconnect delay in seconds
-        self.max_reconnect_delay = 60  # Maximum reconnect delay in seconds
-        self.is_running = False
+    def __init__(self, trading_pairs: list[str] = None):
+        self.trading_pairs = trading_pairs if trading_pairs is not None else []
+        self.callbacks = []
+        self.running = False
+        self.ws = None
+        self.last_message_time = datetime.now()
+        self.reconnect_delay = 1  # Start with 1 second delay
         
-        # Configure logging
-        self._setup_logging()
-        
-    def _setup_logging(self) -> None:
-        """Configure handler-specific logging"""
-        handler = logging.StreamHandler()
-        handler.setFormatter(logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        ))
-        logger.addHandler(handler)
-        logger.setLevel(logging.INFO)
-        
-    async def connect(self) -> None:
-        """Establish WebSocket connection with error handling and reconnection"""
-        while self.is_running:
-            try:
-                async with websockets.connect(
-                    'wss://advanced-trade-ws.coinbase.com',
-                    ping_interval=30,  # Keep connection alive
-                    ping_timeout=10
-                ) as websocket:
-                    self.ws = websocket
-                    self.reconnect_delay = 1  # Reset reconnect delay on successful connection
-                    logger.info("WebSocket connection established")
-                    
-                    # Subscribe to channels
-                    await self._subscribe()
-                    
-                    # Start message handling loop
-                    await self._message_loop()
-                    
-            except websockets.exceptions.ConnectionClosed as e:
-                logger.warning(f"WebSocket connection closed: {e}, attempting to reconnect...")
-                await self._handle_reconnect()
-            except Exception as e:
-                logger.error(f"WebSocket error: {e}")
-                await self._handle_reconnect()
-                
-    async def _handle_reconnect(self) -> None:
-        """Handle reconnection with exponential backoff"""
-        logger.info(f"Waiting {self.reconnect_delay}s before reconnecting...")
-        await asyncio.sleep(self.reconnect_delay)
-        self.reconnect_delay = min(self.reconnect_delay * 2, self.max_reconnect_delay)
-        
-    async def _subscribe(self) -> None:
-        """Subscribe to market data channels"""
-        if not self.ws:
-            logger.error("Cannot subscribe: WebSocket connection not established")
-            return
+    def register_callback(self, pairs: Union[str, list[str]], callback: Callable) -> None:
+        """Register a callback for specific trading pairs"""
+        if not isinstance(pairs, list):
+            pairs = [pairs]
+        self.callbacks.append(callback)
+        for pair in pairs:
+            if pair not in self.trading_pairs:
+                self.trading_pairs.append(pair)
+    
+    def unregister_callback(self, pairs: Union[str, list[str]], callback: Callable) -> None:
+        """Unregister a callback for specific trading pairs"""
+        if not isinstance(pairs, list):
+            pairs = [pairs]
+        for pair in pairs:
+            if pair in self.trading_pairs:
+                self.trading_pairs.remove(pair)
+        self.callbacks = [cb for cb in self.callbacks if cb != callback]
             
-        for pair in self.config['trading_pairs']:
-            pair_id = pair['pair']
-            message = {
-                "type": "subscribe",
-                "product_ids": [pair_id],
-                "channel": "market_trades",
-            }
-            try:
-                await self.ws.send(json.dumps(message))
-                self.subscribed_pairs.add(pair_id)
-                logger.info(f"Subscribed to {pair_id}")
-            except Exception as e:
-                logger.error(f"Failed to subscribe to {pair_id}: {e}")
+    async def _connect(self) -> bool:
+        """Establish WebSocket connection"""
+        try:
+            self.ws = await websockets.connect('wss://ws-feed.pro.coinbase.com')
+            self.last_message_time = datetime.now()
             
-    async def _message_loop(self) -> None:
-        """Handle incoming WebSocket messages"""
-        if not self.ws:
-            logger.error("Cannot start message loop: WebSocket connection not established")
-            return
-            
-        while self.is_running:
-            try:
-                message = await self.ws.recv()
-                self.last_message_time = datetime.now()
-                
-                data = json.loads(message)
-                await self._process_message(data)
-                
-            except websockets.exceptions.ConnectionClosed:
-                logger.warning("Connection closed during message loop")
-                break
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to decode WebSocket message: {e}")
-                continue
-            except Exception as e:
-                logger.error(f"Error processing message: {e}")
-                continue
-                
-    async def _process_message(self, data: Dict[str, Any]) -> None:
-        """Process received market data and trigger callbacks"""
-        if data.get('type') == 'market_trades':
-            pair_id = data.get('product_id')
-            if pair_id and pair_id in self.callbacks:
+            # Subscribe to market data if we have trading pairs
+            if self.trading_pairs:
+                subscription = {
+                    'type': 'subscribe',
+                    'product_ids': self.trading_pairs,
+                    'channel': 'market_trades'
+                }
                 try:
-                    await self.callbacks[pair_id](data)
+                    await self.ws.send(json.dumps(subscription))
+                    logger.info(f"Subscribed to {len(self.trading_pairs)} trading pairs")
+                    return True
                 except Exception as e:
-                    logger.error(f"Error in callback for {pair_id}: {e}")
-                    logger.debug(f"Callback error details: {e}", exc_info=True)
-                    
-    def register_callback(self, pair_id: str, callback: Callable) -> None:
-        """Register callback for market data updates"""
-        self.callbacks[pair_id] = callback
-        logger.debug(f"Registered callback for {pair_id}")
-        
-    def unregister_callback(self, pair_id: str) -> None:
-        """Remove callback for market data updates"""
-        if pair_id in self.callbacks:
-            del self.callbacks[pair_id]
-            logger.debug(f"Unregistered callback for {pair_id}")
+                    logger.error(f"Failed to send subscription: {e}")
+                    return False
+            else:
+                logger.warning("No trading pairs registered for subscription")
+                return True
+                
+        except Exception as e:
+            logger.error(f"WebSocket connection error: {e}")
+            return False
+            
+    async def _process_message(self, message: Union[str, dict]) -> None:
+        """Process received message and invoke callbacks"""
+        try:
+            data = json.loads(message) if isinstance(message, str) else message
+            errors = []
+            
+            for callback in self.callbacks:
+                try:
+                    if asyncio.iscoroutinefunction(callback):
+                        await callback(data)
+                    else:
+                        callback(data)
+                except Exception as e:
+                    error_msg = f"Callback error: {e}"
+                    logger.error(error_msg)
+                    errors.append(error_msg)
+            
+            if errors:
+                raise Exception("; ".join(errors))
+                
+        except Exception as e:
+            logger.error(f"Message processing error: {e}")
+            raise  # Re-raise the exception for proper error handling in tests
             
     async def start(self) -> None:
-        """Start the WebSocket handler"""
-        self.is_running = True
+        """Start WebSocket handler"""
         logger.info("Starting WebSocket handler")
-        await self.connect()
+        self.running = True
         
+        while self.running:
+            try:
+                connected = await self._connect()
+                if connected:
+                    self.reconnect_delay = 1  # Reset delay on successful connection
+                    
+                    while self.running:
+                        try:
+                            message = await self.ws.recv()
+                            self.last_message_time = datetime.now()
+                            await self._process_message(message)
+                        except Exception as e:
+                            if isinstance(e, websockets.exceptions.ConnectionClosed):
+                                logger.error("WebSocket connection closed")
+                                break
+                            logger.error(f"WebSocket error: {e}")
+                            break
+                            
+            except Exception as e:
+                logger.error(f"WebSocket error: {e}")
+                
+            if self.running:
+                logger.info(f"Waiting {self.reconnect_delay}s before reconnecting...")
+                await asyncio.sleep(self.reconnect_delay)
+                self.reconnect_delay = min(self.reconnect_delay * 2, 60)  # Exponential backoff
+                
     async def stop(self) -> None:
-        """Stop the WebSocket handler"""
-        self.is_running = False
+        """Stop WebSocket handler"""
+        self.running = False
         if self.ws:
-            logger.info("Closing WebSocket connection")
             await self.ws.close()
-            self.ws = None
         logger.info("WebSocket handler stopped")

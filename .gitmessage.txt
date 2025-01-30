@@ -1,0 +1,5 @@
+[Module.Step] Short description of the change
+- Feature: 
+- Status: [Complete | Needs Review]
+- Review Log: C:\Projects\CryptoJ_Trader_New\Updates\update_log_[YYYYMMDD_HHMM].txt
+- Notes:

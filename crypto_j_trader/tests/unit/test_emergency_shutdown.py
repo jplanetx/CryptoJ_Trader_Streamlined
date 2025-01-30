@@ -1,170 +1,185 @@
+"""Tests for emergency shutdown functionality."""
+
 import pytest
 import asyncio
-import json
-from datetime import datetime
-from unittest.mock import Mock, patch, AsyncMock
-from crypto_j_trader.src.trading.trading_core import TradingBot
+from datetime import datetime, timedelta
+import pandas as pd
+from unittest.mock import Mock, AsyncMock, patch
+from crypto_j_trader.src.trading.emergency_manager import EmergencyManager
 
 @pytest.fixture
 def config():
     return {
-        'trading_pairs': [
-            {'pair': 'BTC-USD', 'weight': 0.6, 'precision': 8},
-            {'pair': 'ETH-USD', 'weight': 0.4, 'precision': 6}
-        ],
-        'websocket': {
-            'enabled': True,
-            'reconnect_max_attempts': 3,
-            'reconnect_delay_seconds': 1,
-            'heartbeat_interval_seconds': 30
-        },
         'emergency_price_change_threshold': 0.1,
-        'paper_trading': True,
-        'initial_capital': 10000,
-        'target_capital': 20000,
-        'days_target': 30,
-        'execution': {
-            'interval_seconds': 60
-        }
+        'volume_spike_threshold': 5.0,
+        'max_data_age_seconds': 300,
+        'trading_pairs': [
+            {'pair': 'BTC-USD', 'weight': 0.6},
+            {'pair': 'ETH-USD', 'weight': 0.4}
+        ]
     }
+
+@pytest.fixture
+def mock_market_data():
+    now = datetime.now()
+    index = pd.date_range(end=now, periods=10, freq='1min')
+    
+    df = pd.DataFrame({
+        'price': [50000] * 10,  # Stable price
+        'size': [100] * 10,     # Stable volume
+        'low': [49900] * 10,
+        'high': [50100] * 10,
+        'open': [49950] * 10,
+        'close': [50050] * 10,
+    }, index=index)
+    
+    return {'BTC-USD': df}
 
 @pytest.fixture
 def mock_websocket():
-    return AsyncMock()
+    mock = AsyncMock()
+    mock.last_message_time = datetime.now()
+    return mock
 
 @pytest.fixture
-async def trading_bot(config):
-    with patch('crypto_j_trader.j_trading.TradingBot.load_config', return_value=config):
-        with patch('crypto_j_trader.j_trading.TradingBot.setup_api_client'):
-            bot = TradingBot()
-            yield bot
-            # Cleanup
-            if bot.websocket_handler:
-                await bot.websocket_handler.stop()
+def emergency_manager(config):
+    return EmergencyManager(config)
 
 @pytest.mark.asyncio
-async def test_emergency_shutdown_price_movement(trading_bot):
+async def test_emergency_price_movement(emergency_manager, mock_market_data):
     """Test emergency shutdown triggers on extreme price movement"""
-    
-    # Setup mock market data with extreme price change
-    trading_bot.market_data = {
-        'BTC-USD': Mock(
-            empty=False,
-            **{
-                'price.iloc': [-2, -1],
-                'size.iloc': [-1]
-            }
-        )
-    }
-    
-    # Simulate extreme price movement
-    result = trading_bot._check_emergency_conditions('BTC-USD', 60000)  # 100% price increase
-    assert result is True
-    
-@pytest.mark.asyncio
-async def test_emergency_shutdown_volume_spike(trading_bot):
-    """Test emergency shutdown triggers on unusual volume"""
-    
-    # Setup mock market data with volume spike
-    trading_bot.market_data = {
-        'BTC-USD': Mock(
-            empty=False,
-            **{
-                'size.rolling.return_value.mean.iloc': [-1],
-                'size.iloc': [-1]
-            }
-        )
-    }
-    trading_bot.market_data['BTC-USD'].size.rolling.return_value.mean.iloc[-1] = 1.0
-    trading_bot.market_data['BTC-USD'].size.iloc[-1] = 10.0  # 10x average volume
-    
-    result = trading_bot._check_emergency_conditions('BTC-USD', 50000)
+    # Set up mock data with price spike
+    df = mock_market_data['BTC-USD'].copy()
+    df.iloc[-1, df.columns.get_loc('price')] = 60000  # 20% increase
+    mock_market_data['BTC-USD'] = df
+
+    result = await emergency_manager.check_emergency_conditions(
+        'BTC-USD',
+        60000,  # Current price
+        mock_market_data
+    )
     assert result is True
 
 @pytest.mark.asyncio
-async def test_emergency_shutdown_procedure(trading_bot):
-    """Test complete emergency shutdown procedure"""
+async def test_emergency_volume_spike(emergency_manager, mock_market_data):
+    """Test emergency shutdown triggers on volume spike"""
+    # Set up mock data with volume spike
+    df = mock_market_data['BTC-USD'].copy()
+    df.iloc[-1, df.columns.get_loc('size')] = 1000  # 10x volume spike
+    mock_market_data['BTC-USD'] = df
     
-    # Setup mock positions
-    trading_bot.portfolio.positions = {
+    result = await emergency_manager.check_emergency_conditions(
+        'BTC-USD',
+        50000,
+        mock_market_data
+    )
+    assert result is True
+
+@pytest.mark.asyncio
+async def test_emergency_shutdown_procedure(emergency_manager):
+    """Test complete emergency shutdown procedure"""
+    positions = {
         'BTC-USD': {'quantity': 1.0},
         'ETH-USD': {'quantity': 5.0}
     }
     
-    # Setup mock market data
-    trading_bot.market_data = {
-        'BTC-USD': Mock(empty=False, **{'price.iloc': [-1]}),
-        'ETH-USD': Mock(empty=False, **{'price.iloc': [-1]})
-    }
-    trading_bot.market_data['BTC-USD'].price.iloc[-1] = 50000
-    trading_bot.market_data['ETH-USD'].price.iloc[-1] = 3000
+    mock_execute_trade = AsyncMock()
+    mock_websocket = AsyncMock()
     
-    # Mock execute_trade to track calls
-    trading_bot.execute_trade = AsyncMock()
-    
-    # Trigger emergency shutdown
-    await trading_bot._initiate_emergency_shutdown()
+    await emergency_manager.initiate_emergency_shutdown(
+        positions,
+        mock_execute_trade,
+        mock_websocket
+    )
     
     # Verify shutdown state
-    assert trading_bot.emergency_shutdown is True
-    assert trading_bot.shutdown_requested is True
+    assert emergency_manager.emergency_shutdown is True
+    assert emergency_manager.shutdown_requested is True
     
     # Verify position closing attempts
-    assert trading_bot.execute_trade.call_count == 2  # Should try to close both positions
-    
-@pytest.mark.asyncio
-async def test_websocket_integration_shutdown(trading_bot, mock_websocket):
-    """Test WebSocket integration during shutdown"""
-    
-    # Setup mock WebSocket handler
-    trading_bot.websocket_handler.ws = mock_websocket
-    
-    # Trigger shutdown
-    await trading_bot._initiate_emergency_shutdown()
-    
-    # Verify WebSocket cleanup
-    assert mock_websocket.close.called
-    
-@pytest.mark.asyncio
-async def test_trading_loop_emergency_handling(trading_bot):
-    """Test trading loop handles emergency conditions"""
-    
-    # Setup conditions that should trigger emergency shutdown
-    async def mock_check_system_health():
-        return False
-    
-    trading_bot._check_system_health = mock_check_system_health
-    trading_bot._initiate_emergency_shutdown = AsyncMock()
-    
-    # Start trading loop in background task
-    loop_task = asyncio.create_task(trading_bot.run_trading_loop())
-    
-    # Wait briefly for loop to process
-    await asyncio.sleep(0.1)
-    
-    # Stop the loop
-    trading_bot.shutdown_requested = True
-    await loop_task
-    
-    # Verify emergency shutdown was initiated
-    assert trading_bot._initiate_emergency_shutdown.called
+    assert mock_execute_trade.call_count == 2  # Should try to close both positions
+    assert mock_websocket.stop.called
 
 @pytest.mark.asyncio
-async def test_system_health_monitoring(trading_bot):
-    """Test system health monitoring"""
+async def test_websocket_connection_health(emergency_manager, mock_market_data, mock_websocket):
+    """Test WebSocket connection health monitoring"""
+    # Test with fresh connection
+    result = await emergency_manager.check_emergency_conditions(
+        'BTC-USD',
+        50000,
+        mock_market_data,
+        mock_websocket
+    )
+    assert result is False
     
-    # Test stale WebSocket connection
-    trading_bot.websocket_handler.last_message_time = datetime.now()
-    assert trading_bot._check_system_health() is True
+    # Test with stale connection
+    mock_websocket.last_message_time = datetime.now() - timedelta(seconds=emergency_manager.max_data_age_seconds + 10)
+    result = await emergency_manager.check_emergency_conditions(
+        'BTC-USD',
+        50000,
+        mock_market_data,
+        mock_websocket
+    )
+    assert result is True
+
+@pytest.mark.asyncio
+async def test_market_data_freshness(emergency_manager, mock_market_data):
+    """Test market data freshness check"""
+    # Test with fresh data
+    result = await emergency_manager.check_emergency_conditions(
+        'BTC-USD',
+        50000,
+        mock_market_data
+    )
+    assert result is False
     
-    # Test stale market data
-    trading_bot.market_data = {
-        'BTC-USD': Mock(
-            empty=False,
-            **{
-                'index': [-1],
-                'iloc': lambda x: datetime.now()
-            }
-        )
-    }
-    assert trading_bot._check_system_health() is True
+    # Test with stale data
+    df = mock_market_data['BTC-USD'].copy()
+    df.index = [
+        datetime.now() - timedelta(seconds=emergency_manager.max_data_age_seconds + i)
+        for i in range(len(df), 0, -1)
+    ]
+    mock_market_data['BTC-USD'] = df
+    
+    result = await emergency_manager.check_emergency_conditions(
+        'BTC-USD',
+        50000,
+        mock_market_data
+    )
+    assert result is True
+
+@pytest.mark.asyncio
+async def test_error_handling(emergency_manager):
+    """Test error handling during emergency checks"""
+    # Test with invalid market data
+    result = await emergency_manager.check_emergency_conditions(
+        'BTC-USD',
+        50000,
+        {'BTC-USD': None}
+    )
+    assert result is True  # Should trigger shutdown on error
+    
+    # Test with missing data
+    result = await emergency_manager.check_emergency_conditions(
+        'BTC-USD',
+        50000,
+        {}
+    )
+    assert result is False  # No data is not an emergency
+
+@pytest.mark.asyncio
+async def test_shutdown_cleanup(emergency_manager):
+    """Test cleanup during emergency shutdown"""
+    positions = {'BTC-USD': {'quantity': 1.0}}
+    mock_execute_trade = AsyncMock(side_effect=Exception("Trade failed"))
+    mock_websocket = AsyncMock()
+    
+    await emergency_manager.initiate_emergency_shutdown(
+        positions,
+        mock_execute_trade,
+        mock_websocket
+    )
+    
+    # Verify shutdown completed despite errors
+    assert emergency_manager.emergency_shutdown is True
+    assert mock_websocket.stop.called  # WebSocket cleanup should still occur
