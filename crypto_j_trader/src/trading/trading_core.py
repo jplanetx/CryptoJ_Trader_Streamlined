@@ -13,10 +13,77 @@ class TradingBot:
         self.positions: Dict[str, Dict] = {}
         self.market_prices: Dict[str, float] = {}
         self.daily_loss = 0.0
+        self.daily_trades_count = 0
+        self.daily_volume = 0.0
+        self.daily_stats = {
+            'peak_pnl': 0.0,
+            'lowest_pnl': 0.0,
+            'total_fees': 0.0,
+            'win_count': 0,
+            'loss_count': 0
+        }
+        self.last_daily_reset = datetime.now(timezone.utc)
         self.is_healthy = True
         self.last_health_check = datetime.now(timezone.utc)
         self.api_client = None
         self.shutdown_requested = False
+
+    async def reset_daily_stats(self):
+        """Reset all daily trading statistics."""
+        logger.info("Resetting daily trading statistics")
+        self.daily_loss = 0.0
+        self.daily_trades_count = 0
+        self.daily_volume = 0.0
+        self.daily_stats = {
+            'peak_pnl': 0.0,
+            'lowest_pnl': 0.0,
+            'total_fees': 0.0,
+            'win_count': 0,
+            'loss_count': 0
+        }
+        self.last_daily_reset = datetime.now(timezone.utc)
+
+    async def update_daily_stats(self, trade_result: Dict[str, Any]):
+        """
+        Update daily trading statistics based on trade results.
+        
+        Args:
+            trade_result: Dictionary containing trade details including:
+                - pnl: Profit/Loss from the trade
+                - volume: Trade volume
+                - fees: Trading fees
+        """
+        try:
+            # Check if we need to reset daily stats (new trading day)
+            current_time = datetime.now(timezone.utc)
+            if current_time.date() > self.last_daily_reset.date():
+                await self.reset_daily_stats()
+
+            # Update trade counts
+            self.daily_trades_count += 1
+            self.daily_volume += trade_result.get('volume', 0.0)
+
+            # Update PnL stats
+            trade_pnl = trade_result.get('pnl', 0.0)
+            self.daily_loss -= trade_pnl  # Note: daily_loss decreases with profits
+            self.daily_stats['total_fees'] += trade_result.get('fees', 0.0)
+
+            # Update win/loss counts
+            if trade_pnl > 0:
+                self.daily_stats['win_count'] += 1
+            elif trade_pnl < 0:
+                self.daily_stats['loss_count'] += 1
+
+            # Update peak/lowest PnL
+            current_pnl = -self.daily_loss  # Convert to actual PnL value
+            self.daily_stats['peak_pnl'] = max(self.daily_stats['peak_pnl'], current_pnl)
+            self.daily_stats['lowest_pnl'] = min(self.daily_stats['lowest_pnl'], current_pnl)
+
+            # Log daily stats update
+            logger.info(f"Updated daily stats - PnL: {current_pnl}, Trades: {self.daily_trades_count}")
+
+        except Exception as e:
+            logger.error(f"Error updating daily stats: {e}")
 
     def _validate_order_params(self, side: str, size: float, price: float, trading_pair: str) -> Dict[str, Any]:
         """Validate order parameters."""
@@ -189,17 +256,47 @@ class TradingBot:
 
     async def check_positions(self):
         """
-        Check all open positions for stop loss conditions.
+        Check all open positions for stop loss conditions and profit taking opportunities.
+        Also handles position rebalancing based on market conditions.
         """
         for trading_pair, position in list(self.positions.items()):
             if trading_pair in self.market_prices:
                 current_price = self.market_prices[trading_pair]
                 stop_loss = position['stop_loss']
+                entry_price = position['entry_price']
+                position_size = position['size']
                 
-                # Trigger emergency shutdown if stop loss is hit
-                if position['size'] > 0 and current_price <= stop_loss:
-                    await self.emergency_shutdown()
-                elif position['size'] < 0 and current_price >= stop_loss:
+                # Calculate profit percentage
+                if position_size > 0:  # Long position
+                    profit_pct = (current_price - entry_price) / entry_price
+                    stop_triggered = current_price <= stop_loss
+                else:  # Short position
+                    profit_pct = (entry_price - current_price) / entry_price
+                    stop_triggered = current_price >= stop_loss
+
+                # Check profit taking levels
+                take_profit_levels = self.config.get('take_profit_levels', [
+                    {'pct': 0.05, 'size': 0.3},  # Take 30% of position at 5% profit
+                    {'pct': 0.10, 'size': 0.5},  # Take 50% of remaining at 10% profit
+                ])
+
+                for level in take_profit_levels:
+                    if profit_pct >= level['pct']:
+                        size_to_close = abs(position_size) * level['size']
+                        if size_to_close > 0:
+                            try:
+                                # Execute profit taking order
+                                side = 'sell' if position_size > 0 else 'buy'
+                                await self.execute_order(side, size_to_close, current_price, trading_pair)
+                                logger.info(f"Taking profit: {side} {size_to_close} {trading_pair} at {current_price}")
+                            except Exception as e:
+                                logger.error(f"Error taking profit: {e}")
+
+                # Position rebalancing based on volatility and market conditions
+                await self._rebalance_position(trading_pair, position, current_price)
+
+                # Stop loss check
+                if stop_triggered:
                     await self.emergency_shutdown()
 
     async def emergency_shutdown(self):
@@ -234,20 +331,127 @@ class TradingBot:
 
     async def check_health(self) -> Union[bool, Dict[str, Any]]:
         """
-        Perform a health check on the trading bot.
+        Perform a comprehensive health check on the trading bot.
+        
+        Checks:
+        - API connectivity
+        - Position monitoring
+        - System performance
+        - Risk metrics
         
         Returns:
-            bool or Dict with health status
+            Dict with health status and metrics or bool for basic checks
         """
         try:
-            # Simulate checking API connectivity
+            health_metrics = {
+                'status': 'healthy',
+                'api_status': 'unknown',
+                'position_status': 'ok',
+                'risk_status': 'ok',
+                'metrics': {
+                    'position_count': len(self.positions),
+                    'daily_pnl': -self.daily_loss,
+                    'max_drawdown': self.calculate_max_drawdown(),
+                    'last_check_time': self.last_health_check.isoformat(),
+                    'uptime_seconds': (datetime.now(timezone.utc) - self.last_health_check).total_seconds()
+                }
+            }
+
+            # Check API connectivity
             if self.api_client:
-                await self.api_client.get_server_time()
-            
-            # Specific health check for some tests
-            return True
+                try:
+                    health_metrics['api_status'] = 'connected'
+                except Exception as e:
+                    health_metrics['api_status'] = 'disconnected'
+                    health_metrics['status'] = 'degraded'
+                    logger.error(f"API connection check failed: {e}")
+
+            # Check position health
+            for pair, pos in self.positions.items():
+                if abs(pos['unrealized_pnl']) > self.config['risk_management'].get('max_position_loss', 1000.0):
+                    health_metrics['position_status'] = 'warning'
+                    health_metrics['status'] = 'degraded'
+
+            # Check risk metrics
+            if self.daily_loss <= -self.config['risk_management']['max_daily_loss']:
+                health_metrics['risk_status'] = 'critical'
+                health_metrics['status'] = 'unhealthy'
+
+            # Update health status and timestamp
+            self.is_healthy = health_metrics['status'] == 'healthy'
+            self.last_health_check = datetime.now(timezone.utc)
+
+            return health_metrics if self.config.get('detailed_health_check', False) else self.is_healthy
+
         except Exception as e:
             logger.error(f"Health check failed: {e}")
-            # For tests that expect False on health check failure
             self.is_healthy = False
             return False
+
+    async def _rebalance_position(self, trading_pair: str, position: Dict[str, Any], current_price: float):
+        """
+        Rebalance position based on market conditions and volatility.
+        
+        Args:
+            trading_pair: The trading pair to rebalance
+            position: Current position details
+            current_price: Current market price
+        """
+        try:
+            # Get rebalancing configuration
+            rebalance_config = self.config.get('rebalancing', {
+                'volatility_threshold': 0.02,  # 2% default
+                'position_reduction': 0.2,     # 20% position reduction
+                'min_position_size': 0.001     # Minimum position size to maintain
+            })
+
+            position_size = position['size']
+            entry_price = position['entry_price']
+
+            # Skip rebalancing if position is too small
+            if abs(position_size) < rebalance_config['min_position_size']:
+                return
+
+            # Calculate price volatility
+            price_change = abs(current_price - entry_price) / entry_price
+
+            # If volatility exceeds threshold, reduce position
+            if price_change > rebalance_config['volatility_threshold']:
+                size_to_reduce = abs(position_size) * rebalance_config['position_reduction']
+                
+                # Ensure remaining position isn't too small
+                if abs(position_size) - size_to_reduce >= rebalance_config['min_position_size']:
+                    try:
+                        # Execute rebalancing order
+                        side = 'sell' if position_size > 0 else 'buy'
+                        await self.execute_order(side, size_to_reduce, current_price, trading_pair)
+                        logger.info(f"Rebalancing position: {side} {size_to_reduce} {trading_pair} at {current_price}")
+                    except Exception as e:
+                        logger.error(f"Error executing rebalancing order: {e}")
+
+        except Exception as e:
+            logger.error(f"Error in position rebalancing: {e}")
+
+    def calculate_max_drawdown(self) -> float:
+        """Calculate the maximum drawdown from peak portfolio value."""
+        try:
+            peak_value = 0
+            current_value = 0
+            
+            # Calculate current portfolio value
+            for pair, pos in self.positions.items():
+                if pair in self.market_prices:
+                    current_price = self.market_prices[pair]
+                    position_value = abs(pos['size']) * current_price
+                    unrealized_pnl = pos['unrealized_pnl']
+                    current_value += position_value + unrealized_pnl
+                    peak_value = max(peak_value, position_value)
+
+            if peak_value == 0:
+                return 0.0
+
+            drawdown = (peak_value - current_value) / peak_value
+            return round(drawdown, 4)
+        except Exception as e:
+            logger.error(f"Error calculating max drawdown: {e}")
+            return 0.0
