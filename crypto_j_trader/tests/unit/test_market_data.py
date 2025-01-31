@@ -1,171 +1,221 @@
-"""Tests for market data functionality."""
+"""Unit tests for market data handling."""
 import pytest
-import pandas as pd
-from unittest.mock import patch, MagicMock
-from datetime import datetime
-from crypto_j_trader.src.trading.market_data import MarketData
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, patch
+from crypto_j_trader.src.trading.market_data import MarketDataManager
 
 @pytest.fixture
-def market_data():
-    # Use paper_trading=False so that tests go through the real code path (with mocked requests).
-    return MarketData(api_url="https://mockapi.test", paper_trading=False)
-
-@pytest.fixture
-def mock_candle_response():
+def market_config():
+    """Test configuration for market data."""
     return {
-        "candles": [
-            {
-                "start": "2025-01-24T00:00:00Z",
-                "low": "42000.00",
-                "high": "42500.00",
-                "open": "42100.00",
-                "close": "42400.00",
-                "volume": "1500000.00"
-            },
-            {
-                "start": "2025-01-24T01:00:00Z",
-                "low": "42200.00",
-                "high": "42700.00",
-                "open": "42300.00",
-                "close": "42600.00",
-                "volume": "1800000.00"
-            }
-        ]
+        'trading_pairs': ['BTC-USD', 'ETH-USD'],
+        'granularity': 60,  # 1-minute candles
+        'data_window': '1h'  # 1 hour of data
     }
 
 @pytest.fixture
-def mock_ticker_response():
-    return {
-        "price": "42500.00",
-        "volume_24h": "15000000.00",
-        "low_24h": "41800.00",
-        "high_24h": "42900.00",
-        "time": "2025-01-24T02:00:00Z"
+def mock_data_manager(market_config):
+    """Create MarketDataManager with mocked API."""
+    manager = MarketDataManager(market_config)
+    manager.api_client = AsyncMock()
+    return manager
+
+@pytest.mark.asyncio
+async def test_get_market_data_success(mock_data_manager):
+    """Test successful market data retrieval."""
+    mock_data = [
+        [1625097600, 35000, 35100, 34900, 35050, 100],  # timestamp, open, high, low, close, volume
+        [1625097660, 35050, 35200, 35000, 35150, 120]
+    ]
+    mock_data_manager.api_client.get_historic_rates = AsyncMock(return_value=mock_data)
+    
+    data = await mock_data_manager.get_market_data('BTC-USD')
+    assert len(data) == 2
+    assert all(key in data[0] for key in ['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+    assert data[0]['close'] == 35050
+
+@pytest.mark.asyncio
+async def test_get_ticker_success(mock_data_manager):
+    """Test successful ticker data retrieval."""
+    mock_ticker = {
+        'price': '35000.00',
+        'volume': '1000.00',
+        'time': datetime.now(timezone.utc).isoformat()
     }
+    mock_data_manager.api_client.get_ticker = AsyncMock(return_value=mock_ticker)
+    
+    ticker = await mock_data_manager.get_ticker('BTC-USD')
+    assert 'price' in ticker
+    assert 'volume' in ticker
+    assert isinstance(ticker['price'], float)
+    assert ticker['price'] == 35000.00
 
-def test_get_market_data_success(market_data, mock_candle_response):
-    """Test successful market data retrieval"""
-    with patch('requests.get') as mock_get:
-        mock_response = MagicMock()
-        mock_response.json.return_value = mock_candle_response
-        mock_response.status_code = 200
-        mock_get.return_value = mock_response
+@pytest.mark.asyncio
+async def test_get_ticker_api_error(mock_data_manager):
+    """Test ticker retrieval with API error."""
+    mock_data_manager.api_client.get_ticker = AsyncMock(side_effect=Exception("API Error"))
+    
+    with pytest.raises(Exception, match="API Error"):
+        await mock_data_manager.get_ticker('BTC-USD')
 
-        df = market_data.get_market_data("BTC-USD", "1h", 2)
-        
-        assert isinstance(df, pd.DataFrame)
-        assert len(df) == 2
-        assert list(df.columns) == ['low', 'high', 'open', 'close', 'volume']
-        assert pd.api.types.is_float_dtype(df['close'])
-        assert df.iloc[0]['close'] == 42400.00
-        assert df.iloc[1]['volume'] == 1800000.00
+@pytest.mark.asyncio
+async def test_aggregate_market_data_success(mock_data_manager):
+    """Test successful market data aggregation."""
+    mock_data = [
+        {
+            'timestamp': 1625097600,
+            'open': 35000,
+            'high': 35100,
+            'low': 34900,
+            'close': 35050,
+            'volume': 100
+        },
+        {
+            'timestamp': 1625097660,
+            'open': 35050,
+            'high': 35200,
+            'low': 35000,
+            'close': 35150,
+            'volume': 120
+        }
+    ]
+    
+    agg_data = await mock_data_manager.aggregate_market_data(mock_data)
+    assert all(key in agg_data for key in ['vwap', 'volume', 'high', 'low', 'close'])
+    assert agg_data['vwap'] > 0
+    assert agg_data['volume'] == 220
+    assert agg_data['high'] == 35200
+    assert agg_data['low'] == 34900
 
-def test_get_market_data_api_error(market_data):
-    """Test API error handling"""
-    with patch('requests.get') as mock_get:
-        mock_response = MagicMock()
-        mock_response.status_code = 500
-        mock_response.text = "Internal Server Error"
-        mock_get.return_value = mock_response
+@pytest.mark.asyncio
+async def test_aggregate_market_data_partial_failure(mock_data_manager):
+    """Test market data aggregation with some invalid data."""
+    mock_data = [
+        {
+            'timestamp': 1625097600,
+            'open': 35000,
+            'high': 35100,
+            'low': 34900,
+            'close': 35050,
+            'volume': 100
+        },
+        {
+            'timestamp': 1625097660,
+            'open': None,  # Invalid open
+            'high': None,  # Invalid high
+            'low': None,  # Invalid low
+            'close': None,  # Invalid close
+            'volume': 120
+        },
+        {
+            'timestamp': 1625097720,
+            'open': 35150,
+            'high': 35300,
+            'low': 35100,
+            'close': 35200,
+            'volume': 90
+        }
+    ]
+    
+    agg_data = await mock_data_manager.aggregate_market_data(mock_data)
+    assert all(key in agg_data for key in ['vwap', 'volume', 'high', 'low', 'close'])
+    assert agg_data['volume'] == 310  # Should include all volumes
+    assert agg_data['high'] == 35300  # Should use valid data points
+    assert agg_data['low'] == 34900
 
-        with pytest.raises(Exception, match="API request failed"):
-            market_data.get_market_data("BTC-USD", "1h", 2)
+@pytest.mark.asyncio
+async def test_invalid_granularity(mock_data_manager):
+    """Test handling of invalid granularity value."""
+    mock_data_manager.config['granularity'] = 45  # Invalid value
+    
+    with pytest.raises(ValueError, match="Invalid granularity value"):
+        await mock_data_manager.get_market_data('BTC-USD')
 
-def test_get_market_data_invalid_response(market_data):
-    """Test invalid API response handling"""
-    with patch('requests.get') as mock_get:
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"invalid": "data"}
-        mock_response.status_code = 200
-        mock_get.return_value = mock_response
+@pytest.mark.asyncio
+async def test_empty_response_handling(mock_data_manager):
+    """Test handling of empty API response."""
+    mock_data_manager.api_client.get_historic_rates = AsyncMock(return_value=[])
+    
+    data = await mock_data_manager.get_market_data('BTC-USD')
+    assert len(data) == 0
 
-        with pytest.raises(Exception, match="Invalid API response"):
-            market_data.get_market_data("BTC-USD", "1h", 2)
+@pytest.mark.asyncio
+async def test_technical_indicators(mock_data_manager):
+    """Test calculation of technical indicators."""
+    mock_data = [
+        {
+            'timestamp': ts,
+            'open': 35000 + i * 100,
+            'high': 35100 + i * 100,
+            'low': 34900 + i * 100,
+            'close': 35050 + i * 100,
+            'volume': 100 + i * 10
+        }
+        for i, ts in enumerate(range(1625097600, 1625097600 + 3600, 60))
+    ]
+    
+    indicators = await mock_data_manager.calculate_indicators(mock_data)
+    assert all(key in indicators for key in ['rsi', 'macd', 'bb_upper', 'bb_lower'])
+    assert isinstance(indicators['rsi'], float)
+    assert len(indicators['macd']) == 3  # macd, signal, histogram
 
-def test_get_ticker_success(market_data, mock_ticker_response):
-    """Test successful ticker retrieval"""
-    with patch('requests.get') as mock_get:
-        mock_response = MagicMock()
-        mock_response.json.return_value = mock_ticker_response
-        mock_response.status_code = 200
-        mock_get.return_value = mock_response
+@pytest.mark.asyncio
+async def test_market_status_check(mock_data_manager):
+    """Test market status verification."""
+    mock_data_manager.api_client.get_market_status = AsyncMock(return_value={'status': 'online'})
+    
+    status = await mock_data_manager.check_market_status('BTC-USD')
+    assert status['status'] == 'online'
 
-        ticker = market_data.get_ticker("BTC-USD")
-        
-        assert isinstance(ticker, dict)
-        assert ticker['price'] == 42500.00
-        assert ticker['volume_24h'] == 15000000.00
-        assert ticker['low_24h'] == 41800.00
-        assert ticker['high_24h'] == 42900.00
-        assert isinstance(ticker['timestamp'], pd.Timestamp)
+@pytest.mark.asyncio
+async def test_data_freshness(mock_data_manager):
+    """Test verification of data freshness."""
+    # Set up current time in UTC
+    current_time = datetime.now(timezone.utc)
+    
+    # Mock ticker data in UTC
+    mock_ticker = {
+        'price': '35000.00',
+        'volume': '1000.00',
+        'time': current_time.isoformat()
+    }
+    mock_data_manager.api_client.get_ticker = AsyncMock(return_value=mock_ticker)
+    
+    # Initialize last update time with current UTC time
+    mock_data_manager.last_update['BTC-USD'] = current_time
+    
+    # Mock market data to simulate recent data
+    mock_data = [
+        [int(current_time.timestamp()), 35000, 35100, 34900, 35050, 100]
+    ]
+    mock_data_manager.cached_data['BTC-USD'] = [{
+        'timestamp': int(current_time.timestamp()),
+        'open': 35000,
+        'high': 35100,
+        'low': 34900,
+        'close': 35050,
+        'volume': 100
+    }]
+    mock_data_manager.api_client.get_historic_rates = AsyncMock(return_value=mock_data)
+    
+    # Test freshness verification
+    is_fresh = await mock_data_manager.verify_data_freshness('BTC-USD')
+    assert is_fresh is True
 
-def test_get_ticker_api_error(market_data):
-    """Test ticker API error handling"""
-    with patch('requests.get') as mock_get:
-        mock_response = MagicMock()
-        mock_response.status_code = 500
-        mock_response.text = "Internal Server Error"
-        mock_get.return_value = mock_response
-
-        with pytest.raises(Exception, match="API request failed"):
-            market_data.get_ticker("BTC-USD")
-
-def test_aggregate_market_data_success(market_data, mock_candle_response):
-    """Test successful aggregate market data retrieval"""
-    with patch('requests.get') as mock_get:
-        mock_response = MagicMock()
-        mock_response.json.return_value = mock_candle_response
-        mock_response.status_code = 200
-        mock_get.return_value = mock_response
-
-        pairs = ["BTC-USD", "ETH-USD"]
-        result = market_data.aggregate_market_data(pairs)
-        
-        assert isinstance(result, dict)
-        assert len(result) == 2
-        assert all(isinstance(df, pd.DataFrame) for df in result.values())
-        assert all(pair in result for pair in pairs)
-
-def test_aggregate_market_data_partial_failure(market_data, mock_candle_response):
-    """Test partial failure in aggregate market data retrieval"""
-    with patch('requests.get') as mock_get:
-        def mock_get_side_effect(*args, **kwargs):
-            mock_success = MagicMock()
-            mock_success.json.return_value = mock_candle_response
-            mock_success.status_code = 200
-            
-            mock_error = MagicMock()
-            mock_error.status_code = 500
-            mock_error.text = "Internal Server Error"
-            
-            if "BTC-USD" in args[0]:
-                return mock_success
-            return mock_error
-            
-        mock_get.side_effect = mock_get_side_effect
-
-        pairs = ["BTC-USD", "ETH-USD"]
-        result = market_data.aggregate_market_data(pairs)
-        
-        assert isinstance(result, dict)
-        assert len(result) == 2
-        assert not result["ETH-USD"].empty
-        assert len(result["BTC-USD"]) == 2
-
-def test_invalid_granularity(market_data):
-    """Test invalid granularity handling"""
-    with pytest.raises(ValueError, match="Invalid granularity"):
-        market_data.get_market_data("BTC-USD", "invalid")
-
-def test_empty_response_handling(market_data):
-    """Test empty candles response handling"""
-    with patch('requests.get') as mock_get:
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"candles": []}
-        mock_response.status_code = 200
-        mock_get.return_value = mock_response
-
-        df = market_data.get_market_data("BTC-USD")
-        assert isinstance(df, pd.DataFrame)
-        assert df.empty
-        assert list(df.columns) == ['low', 'high', 'open', 'close', 'volume']
+@pytest.mark.asyncio
+async def test_stale_data_freshness(mock_data_manager):
+    """Test verification of stale data."""
+    # Set up stale time (10 minutes ago) in UTC
+    current_time = datetime.now(timezone.utc)
+    stale_time = current_time.replace(minute=current_time.minute - 10)
+    
+    mock_ticker = {
+        'price': '35000.00',
+        'volume': '1000.00',
+        'time': stale_time.isoformat()
+    }
+    mock_data_manager.api_client.get_ticker = AsyncMock(return_value=mock_ticker)
+    
+    # Test freshness verification with stale data
+    is_fresh = await mock_data_manager.verify_data_freshness('BTC-USD')
+    assert is_fresh is False

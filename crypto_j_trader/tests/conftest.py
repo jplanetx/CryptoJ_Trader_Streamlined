@@ -1,20 +1,39 @@
 """
-Test configuration and shared fixtures for the crypto_j_trader test suite.
+Test configuration and fixtures
 """
-
-import os
-import sys
 import pytest
+import asyncio
 from pathlib import Path
+import sys
+from typing import AsyncGenerator
+from asyncio import AbstractEventLoop
 
 # Add project root to Python path
-project_root = Path(__file__).parent.parent
+project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
+# Instead of providing event_loop fixture, use the pytest-asyncio policy
 @pytest.fixture
-def config_path():
-    """Path to test configuration file."""
-    return os.path.join(project_root, 'config', 'example.json')
+def event_loop_policy():
+    """Customize the event loop policy if needed."""
+    return asyncio.DefaultEventLoopPolicy()
+
+@pytest.fixture
+def test_config():
+    """Trading bot test configuration."""
+    return {
+        'trading_pairs': ['BTC-USD', 'ETH-USD'],
+        'risk_management': {
+            'stop_loss_pct': 0.05,
+            'max_position_size': 0.1,
+            'max_drawdown': 0.2
+        },
+        'api_keys': {
+            'key': 'test_key',
+            'secret': 'test_secret'
+        },
+        'paper_trading': True
+    }
 
 @pytest.fixture
 def mock_market_data():
@@ -34,59 +53,18 @@ def mock_market_data():
 
 @pytest.fixture
 def mock_portfolio():
-    """Mock portfolio for testing."""
+    """Mock portfolio data for testing."""
     return {
         'BTC-USD': {
-            'quantity': 1.0,
+            'size': 1.0,
             'entry_price': 48000.0,
-            'entry_time': '2024-01-27T00:00:00Z'
+            'stop_loss': 45600.0,
+            'unrealized_pnl': 2000.0
         },
         'ETH-USD': {
-            'quantity': 10.0,
+            'size': 10.0,
             'entry_price': 2400.0,
-            'entry_time': '2024-01-27T00:00:00Z'
-        }
-    }
-
-@pytest.fixture
-def test_config():
-    """Test configuration."""
-    return {
-        'paper_trading': True,
-        'initial_capital': 100000.0,
-        'target_capital': 200000.0,
-        'days_target': 90,
-        'trading_pairs': [
-            {
-                'pair': 'BTC-USD',
-                'weight': 0.6,
-                'precision': 8
-            },
-            {
-                'pair': 'ETH-USD',
-                'weight': 0.4,
-                'precision': 8
-            }
-        ],
-        'risk_management': {
-            'max_position_size': 0.1,
-            'max_daily_loss': 0.02,
-            'stop_loss_pct': 0.05
-        },
-        'strategy': {
-            'indicators': {
-                'rsi': {'period': 14},
-                'macd': {
-                    'fast_period': 12,
-                    'slow_period': 26,
-                    'signal_period': 9
-                }
-            },
-            'entry_rules': {
-                'min_volume_percentile': 50
-            },
-            'time_filters': {
-                'min_candles': 30
-            }
+            'stop_loss': 2280.0,
+            'unrealized_pnl': 1000.0
         }
     }

@@ -1,157 +1,191 @@
-"""Market data handling for cryptocurrency trading"""
+"""Market data management and processing."""
 import logging
-import requests
-import pandas as pd
-from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Any, Optional
+from datetime import datetime, timedelta, timezone
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
-class MarketData:
-    """Handles market data retrieval and processing"""
+class MarketDataManager:
+    """Manages market data retrieval and processing."""
     
-    def __init__(self, api_url: Optional[str] = None, paper_trading: bool = True):
-        """Initialize MarketData handler
-        
-        Args:
-            api_url: Optional API URL override
-            paper_trading: Whether to use simulated data for paper trading
-        """
-        self.api_url = api_url or "https://api.coinbase.com"
-        self.paper_trading = paper_trading
-        
-    def _create_empty_dataframe(self) -> pd.DataFrame:
-        """Create an empty DataFrame with the expected structure"""
-        return pd.DataFrame(columns=['low', 'high', 'open', 'close', 'volume'])
-
-    def get_market_data(self, symbol: str, granularity: str = "1h", limit: int = 100) -> pd.DataFrame:
-        """Get historical market data
-        
-        Args:
-            symbol: Trading pair symbol (e.g., 'BTC-USD')
-            granularity: Time interval ('1m', '5m', '15m', '1h', '6h', '1d')
-            limit: Number of candles to retrieve
-            
-        Returns:
-            DataFrame with OHLCV data
-        
-        Raises:
-            ValueError: If granularity is invalid
-            Exception: If API request fails or response is invalid
-        """
-        # Validate granularity
-        valid_granularities = ['1m', '5m', '15m', '1h', '6h', '1d']
-        if granularity not in valid_granularities:
-            raise ValueError(f"Invalid granularity. Must be one of {valid_granularities}")
-            
+    VALID_GRANULARITIES = [60, 300, 900, 3600, 21600, 86400]  # 1min, 5min, 15min, 1h, 6h, 24h
+    
+    def __init__(self, config: Dict[str, Any]):
+        """Initialize market data manager."""
+        self.config = config
+        self.api_client = None
+        self.last_update: Dict[str, datetime] = {}
+        self.cached_data: Dict[str, List[Dict[str, Any]]] = {}
+    
+    async def get_market_data(self, trading_pair: str) -> List[Dict[str, Any]]:
+        """Get historical market data for a trading pair."""
         try:
-            if not self.paper_trading:
-                response = requests.get(f"{self.api_url}/v1/products/{symbol}/candles")
-                
-                if response.status_code != 200:
-                    raise Exception("API request failed")
-                    
-                data = response.json()
-                if 'candles' not in data:
-                    raise Exception("Invalid API response")
-                    
-                if not data['candles']:
-                    return self._create_empty_dataframe()
-                    
-                # Convert to DataFrame matching test expectations
-                df = pd.DataFrame(data['candles'])
-                df = df[['low', 'high', 'open', 'close', 'volume']]
-                df = df.astype(float)
-                
-                return df
-            else:
-                # In paper trading mode, return empty DataFrame for tests
-                return self._create_empty_dataframe()
+            granularity = self.config.get('granularity', 60)
+            if granularity not in self.VALID_GRANULARITIES:
+                raise ValueError(f"Invalid granularity value: {granularity}")
             
-        except requests.exceptions.RequestException:
-            raise Exception("API request failed")
-        except ValueError:
-            raise  # Re-raise ValueError for granularity
+            raw_data = await self.api_client.get_historic_rates(
+                product_id=trading_pair,
+                granularity=granularity
+            )
+            
+            # Convert raw data to structured format
+            formatted_data = []
+            for candle in raw_data:
+                formatted_data.append({
+                    'timestamp': candle[0],
+                    'open': float(candle[1]),
+                    'high': float(candle[2]),
+                    'low': float(candle[3]),
+                    'close': float(candle[4]),
+                    'volume': float(candle[5])
+                })
+            
+            self.last_update[trading_pair] = datetime.now(timezone.utc)
+            self.cached_data[trading_pair] = formatted_data
+            return formatted_data
+            
         except Exception as e:
-            if "API request failed" in str(e) or "Invalid API response" in str(e):
-                raise
-            raise Exception("Invalid API response")
-
-    def get_ticker(self, symbol: str) -> Dict:
-        """Get current ticker data
-        
-        Args:
-            symbol: Trading pair symbol (e.g., 'BTC-USD')
-            
-        Returns:
-            Dict with current price information
-        
-        Raises:
-            Exception: If API request fails or response is invalid
-        """
+            logger.error(f"Error getting market data for {trading_pair}: {e}")
+            raise
+    
+    async def get_ticker(self, trading_pair: str) -> Dict[str, Any]:
+        """Get current ticker data for a trading pair."""
         try:
-            if not self.paper_trading:
-                response = requests.get(f"{self.api_url}/v1/products/{symbol}/ticker")
-                
-                if response.status_code != 200:
-                    raise Exception("API request failed")
-                    
-                data = response.json()
-                if not isinstance(data, dict) or 'price' not in data:
-                    raise Exception("Invalid API response")
-                    
-                result = {
-                    'price': float(data['price']),
-                    'volume_24h': float(data.get('volume', 0)),
-                    'low_24h': float(data.get('low', 0)),
-                    'high_24h': float(data.get('high', 0)),
-                    'timestamp': pd.Timestamp(data.get('time', datetime.now()))
-                }
-                return result
-            else:
-                # In paper trading mode, return test data
+            ticker = await self.api_client.get_ticker(product_id=trading_pair)
+            return {
+                'price': float(ticker['price']),
+                'volume': float(ticker['volume']),
+                'time': ticker['time']
+            }
+        except Exception as e:
+            logger.error(f"Error getting ticker for {trading_pair}: {e}")
+            raise
+    
+    async def aggregate_market_data(self, data: List[Dict[str, Any]]) -> Dict[str, float]:
+        """Aggregate market data into summary statistics."""
+        try:
+            total_volume = sum(candle['volume'] for candle in data)
+            
+            # Filter out invalid data points but keep volumes
+            valid_data = [
+                candle for candle in data 
+                if all(candle.get(k) is not None for k in ['open', 'high', 'low', 'close'])
+            ]
+            
+            if not valid_data:
                 return {
-                    'price': 42500.00,
-                    'volume_24h': 15000000.00,
-                    'low_24h': 41800.00,
-                    'high_24h': 42900.00,
-                    'timestamp': pd.Timestamp('2025-01-24T02:00:00Z')
+                    'vwap': 0.0,
+                    'volume': total_volume,
+                    'high': 0.0,
+                    'low': 0.0,
+                    'close': 0.0
                 }
             
-        except requests.exceptions.RequestException:
-            raise Exception("API request failed")
+            # Calculate VWAP using valid data points
+            vwap = sum(candle['close'] * candle['volume'] for candle in valid_data) / \
+                   sum(candle['volume'] for candle in valid_data)
+                   
+            return {
+                'vwap': float(vwap),
+                'volume': float(total_volume),
+                'high': float(max(candle['high'] for candle in valid_data)),
+                'low': float(min(candle['low'] for candle in valid_data)),
+                'close': float(valid_data[-1]['close'])
+            }
+            
         except Exception as e:
-            if "API request failed" in str(e):
-                raise
-            raise Exception("Invalid API response")
-
-    def aggregate_market_data(self, symbols: List[str]) -> Dict[str, pd.DataFrame]:
-        """Aggregate market data for multiple symbols
-        
-        Args:
-            symbols: List of trading pair symbols
+            logger.error(f"Error aggregating market data: {e}")
+            raise
+    
+    async def calculate_indicators(self, data: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Calculate technical indicators."""
+        try:
+            if not data:
+                return {
+                    'rsi': 0.0,
+                    'macd': (0.0, 0.0, 0.0),
+                    'bb_upper': 0.0,
+                    'bb_lower': 0.0
+                }
             
-        Returns:
-            Dict mapping symbols to their market data DataFrames
-        
-        Raises:
-            Exception: If all market data requests fail
-        """
-        result = {}
-        success = False
-        
-        for symbol in symbols:
-            try:
-                data = self.get_market_data(symbol)
-                result[symbol] = data
-                if not data.empty:
-                    success = True
-            except Exception as e:
-                logger.error(f"Failed to fetch data for {symbol}: {e}")
-                result[symbol] = self._create_empty_dataframe()
+            closes = np.array([candle['close'] for candle in data])
+            
+            # Calculate RSI
+            delta = np.diff(closes)
+            gains = np.where(delta > 0, delta, 0)
+            losses = np.where(delta < 0, -delta, 0)
+            
+            avg_gain = np.mean(gains[-14:]) if len(gains) >= 14 else np.mean(gains)
+            avg_loss = np.mean(losses[-14:]) if len(losses) >= 14 else np.mean(losses)
+            
+            rs = avg_gain / avg_loss if avg_loss != 0 else 0
+            rsi = 100 - (100 / (1 + rs))
+            
+            # Calculate MACD
+            ema12 = np.mean(closes[-12:]) if len(closes) >= 12 else np.mean(closes)
+            ema26 = np.mean(closes[-26:]) if len(closes) >= 26 else np.mean(closes)
+            macd_line = ema12 - ema26
+            signal_line = np.mean(closes[-9:]) if len(closes) >= 9 else np.mean(closes)
+            histogram = macd_line - signal_line
+            
+            # Calculate Bollinger Bands
+            sma20 = np.mean(closes[-20:]) if len(closes) >= 20 else np.mean(closes)
+            std20 = np.std(closes[-20:]) if len(closes) >= 20 else np.std(closes)
+            
+            return {
+                'rsi': float(rsi),
+                'macd': (float(macd_line), float(signal_line), float(histogram)),
+                'bb_upper': float(sma20 + (2 * std20)),
+                'bb_lower': float(sma20 - (2 * std20))
+            }
+            
+        except Exception as e:
+            logger.error(f"Error calculating indicators: {e}")
+            raise
+    
+    async def check_market_status(self, trading_pair: str) -> Dict[str, str]:
+        """Check the current market status."""
+        try:
+            status = await self.api_client.get_market_status(trading_pair)
+            return status
+        except Exception as e:
+            logger.error(f"Error checking market status: {e}")
+            return {'status': 'error', 'message': str(e)}
+    
+    async def verify_data_freshness(self, trading_pair: str) -> bool:
+        """Verify if market data is fresh enough."""
+        try:
+            # Get current ticker to check timestamp
+            ticker = await self.get_ticker(trading_pair)
+            ticker_time = datetime.fromisoformat(ticker['time'].replace('Z', '+00:00'))
+            current_time = datetime.now(timezone.utc)
+            
+            # Check if ticker is recent (within last minute)
+            if current_time - ticker_time > timedelta(minutes=1):
+                logger.warning(f"Ticker data is stale for {trading_pair}")
+                return False
                 
-        # Only raise exception if all requests failed
-        if not success:
-            raise Exception("All market data requests failed")
+            # Check if we have recent candle data
+            last_update = self.last_update.get(trading_pair)
+            if not last_update or current_time - last_update > timedelta(minutes=1):
+                logger.warning(f"Candle data is stale for {trading_pair}")
+                return False
             
-        return result
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error verifying data freshness: {e}")
+            return False
+    
+    def get_cached_data(self, trading_pair: str) -> Optional[List[Dict[str, Any]]]:
+        """Get cached market data if available and fresh."""
+        last_update = self.last_update.get(trading_pair)
+        if not last_update:
+            return None
+            
+        if datetime.now(timezone.utc) - last_update > timedelta(minutes=1):
+            return None
+            
+        return self.cached_data.get(trading_pair)
