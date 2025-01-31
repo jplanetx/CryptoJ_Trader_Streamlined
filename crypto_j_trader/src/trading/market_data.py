@@ -1,8 +1,9 @@
 """Market data management and processing."""
 import logging
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Set
 from datetime import datetime, timedelta, timezone
 import numpy as np
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -15,12 +16,91 @@ class MarketDataManager:
         """Initialize market data manager."""
         self.config = config
         self.api_client = None
+        self.ws_handler = None
+        self.trading_pairs: Set[str] = set()
         self.last_update: Dict[str, datetime] = {}
         self.cached_data: Dict[str, List[Dict[str, Any]]] = {}
-    
+        self.latest_tickers: Dict[str, Dict[str, Any]] = {}
+        self._initialize_ws_handler()
+
+    def _initialize_ws_handler(self) -> None:
+        """Initialize WebSocket handler with proper configuration."""
+        if not self.ws_handler and 'websocket' in self.config:
+            from .websocket_handler import WebSocketHandler
+            self.ws_handler = WebSocketHandler(self.config)
+            self.ws_handler.add_callback(self._handle_ws_message)
+
+    async def start(self) -> None:
+        """Start market data manager and initialize connections."""
+        if self.ws_handler:
+            await self.ws_handler.start()
+            # Subscribe to initial trading pairs
+            for pair in self.trading_pairs:
+                await self.subscribe_to_trading_pair(pair)
+
+    async def stop(self) -> None:
+        """Stop market data manager and cleanup connections."""
+        if self.ws_handler:
+            await self.ws_handler.stop()
+
+    async def subscribe_to_trading_pair(self, trading_pair: str) -> bool:
+        """Subscribe to market data for a trading pair."""
+        if trading_pair not in self.trading_pairs:
+            self.trading_pairs.add(trading_pair)
+            if self.ws_handler and self.ws_handler.is_connected:
+                success = await self.ws_handler.subscribe(trading_pair)
+                if success:
+                    logger.info(f"Subscribed to {trading_pair}")
+                    return True
+                logger.error(f"Failed to subscribe to {trading_pair}")
+                return False
+        return True
+
+    async def _handle_ws_message(self, message: Dict[str, Any]) -> None:
+        """Process incoming WebSocket messages."""
+        try:
+            msg_type = message.get('type')
+            if not msg_type:
+                return
+
+            if msg_type == 'ticker':
+                # Update ticker cache
+                product_id = message.get('product_id')
+                if product_id:
+                    self.latest_tickers[product_id] = {
+                        'price': float(message.get('price', 0)),
+                        'volume': float(message.get('volume_24h', 0)),
+                        'time': message.get('time', datetime.now(timezone.utc).isoformat())
+                    }
+                    self.last_update[product_id] = datetime.now(timezone.utc)
+
+            elif msg_type == 'match':
+                # Process real-time trade
+                product_id = message.get('product_id')
+                if product_id:
+                    # Update cached data with new trade
+                    if product_id not in self.cached_data:
+                        self.cached_data[product_id] = []
+                    # Add trade to cached data
+                    self.cached_data[product_id].append({
+                        'timestamp': datetime.fromisoformat(message['time'].replace('Z', '+00:00')).timestamp(),
+                        'price': float(message['price']),
+                        'size': float(message['size'])
+                    })
+                    # Trim cache to reasonable size
+                    if len(self.cached_data[product_id]) > 1000:
+                        self.cached_data[product_id] = self.cached_data[product_id][-1000:]
+
+        except Exception as e:
+            logger.error(f"Error processing WebSocket message: {e}")
+
     async def get_market_data(self, trading_pair: str) -> List[Dict[str, Any]]:
         """Get historical market data for a trading pair."""
         try:
+            # First check WebSocket cache
+            if trading_pair in self.cached_data:
+                return self.cached_data[trading_pair]
+
             granularity = self.config.get('granularity', 60)
             if granularity not in self.VALID_GRANULARITIES:
                 raise ValueError(f"Invalid granularity value: {granularity}")
@@ -53,6 +133,11 @@ class MarketDataManager:
     async def get_ticker(self, trading_pair: str) -> Dict[str, Any]:
         """Get current ticker data for a trading pair."""
         try:
+            # First check WebSocket cache
+            if trading_pair in self.latest_tickers:
+                return self.latest_tickers[trading_pair]
+
+            # Fallback to REST API
             ticker = await self.api_client.get_ticker(product_id=trading_pair)
             return {
                 'price': float(ticker['price']),
@@ -66,7 +151,10 @@ class MarketDataManager:
     async def aggregate_market_data(self, data: List[Dict[str, Any]]) -> Dict[str, float]:
         """Aggregate market data into summary statistics."""
         try:
-            total_volume = sum(candle['volume'] for candle in data)
+            if not data:
+                return self._empty_aggregation()
+
+            total_volume = sum(candle.get('volume', 0) for candle in data)
             
             # Filter out invalid data points but keep volumes
             valid_data = [
@@ -75,17 +163,11 @@ class MarketDataManager:
             ]
             
             if not valid_data:
-                return {
-                    'vwap': 0.0,
-                    'volume': total_volume,
-                    'high': 0.0,
-                    'low': 0.0,
-                    'close': 0.0
-                }
+                return self._empty_aggregation()
             
             # Calculate VWAP using valid data points
-            vwap = sum(candle['close'] * candle['volume'] for candle in valid_data) / \
-                   sum(candle['volume'] for candle in valid_data)
+            vwap = sum(candle['close'] * candle.get('volume', 0) for candle in valid_data) / \
+                   sum(candle.get('volume', 0) for candle in valid_data)
                    
             return {
                 'vwap': float(vwap),
@@ -98,58 +180,100 @@ class MarketDataManager:
         except Exception as e:
             logger.error(f"Error aggregating market data: {e}")
             raise
+
+    def _empty_aggregation(self) -> Dict[str, float]:
+        """Return empty aggregation result."""
+        return {
+            'vwap': 0.0,
+            'volume': 0.0,
+            'high': 0.0,
+            'low': 0.0,
+            'close': 0.0
+        }
     
     async def calculate_indicators(self, data: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Calculate technical indicators."""
         try:
             if not data:
-                return {
-                    'rsi': 0.0,
-                    'macd': (0.0, 0.0, 0.0),
-                    'bb_upper': 0.0,
-                    'bb_lower': 0.0
-                }
+                return self._empty_indicators()
             
             closes = np.array([candle['close'] for candle in data])
-            
-            # Calculate RSI
-            delta = np.diff(closes)
-            gains = np.where(delta > 0, delta, 0)
-            losses = np.where(delta < 0, -delta, 0)
-            
-            avg_gain = np.mean(gains[-14:]) if len(gains) >= 14 else np.mean(gains)
-            avg_loss = np.mean(losses[-14:]) if len(losses) >= 14 else np.mean(losses)
-            
-            rs = avg_gain / avg_loss if avg_loss != 0 else 0
-            rsi = 100 - (100 / (1 + rs))
-            
-            # Calculate MACD
-            ema12 = np.mean(closes[-12:]) if len(closes) >= 12 else np.mean(closes)
-            ema26 = np.mean(closes[-26:]) if len(closes) >= 26 else np.mean(closes)
-            macd_line = ema12 - ema26
-            signal_line = np.mean(closes[-9:]) if len(closes) >= 9 else np.mean(closes)
-            histogram = macd_line - signal_line
-            
-            # Calculate Bollinger Bands
-            sma20 = np.mean(closes[-20:]) if len(closes) >= 20 else np.mean(closes)
-            std20 = np.std(closes[-20:]) if len(closes) >= 20 else np.std(closes)
-            
             return {
-                'rsi': float(rsi),
-                'macd': (float(macd_line), float(signal_line), float(histogram)),
-                'bb_upper': float(sma20 + (2 * std20)),
-                'bb_lower': float(sma20 - (2 * std20))
+                'rsi': self._calculate_rsi(closes),
+                'macd': self._calculate_macd(closes),
+                'bb': self._calculate_bollinger_bands(closes)
             }
             
         except Exception as e:
             logger.error(f"Error calculating indicators: {e}")
             raise
+
+    def _empty_indicators(self) -> Dict[str, Any]:
+        """Return empty indicators result."""
+        return {
+            'rsi': 0.0,
+            'macd': (0.0, 0.0, 0.0),
+            'bb': (0.0, 0.0)
+        }
+
+    def _calculate_rsi(self, closes: np.ndarray, period: int = 14) -> float:
+        """Calculate Relative Strength Index."""
+        if len(closes) < period + 1:
+            return 0.0
+            
+        delta = np.diff(closes)
+        gains = np.where(delta > 0, delta, 0)
+        losses = np.where(delta < 0, -delta, 0)
+        
+        avg_gain = np.mean(gains[-period:])
+        avg_loss = np.mean(losses[-period:])
+        
+        rs = avg_gain / avg_loss if avg_loss != 0 else 0
+        return float(100 - (100 / (1 + rs)))
+
+    def _calculate_macd(self, closes: np.ndarray) -> tuple[float, float, float]:
+        """Calculate MACD indicator."""
+        if len(closes) < 26:
+            return (0.0, 0.0, 0.0)
+            
+        ema12 = np.mean(closes[-12:])
+        ema26 = np.mean(closes[-26:])
+        macd_line = ema12 - ema26
+        signal_line = np.mean(closes[-9:])
+        histogram = macd_line - signal_line
+        
+        return (float(macd_line), float(signal_line), float(histogram))
+
+    def _calculate_bollinger_bands(self, closes: np.ndarray, period: int = 20) -> tuple[float, float]:
+        """Calculate Bollinger Bands."""
+        if len(closes) < period:
+            return (0.0, 0.0)
+            
+        sma = np.mean(closes[-period:])
+        std = np.std(closes[-period:])
+        
+        return (float(sma + (2 * std)), float(sma - (2 * std)))
     
     async def check_market_status(self, trading_pair: str) -> Dict[str, str]:
         """Check the current market status."""
         try:
-            status = await self.api_client.get_market_status(trading_pair)
-            return status
+            # Check WebSocket connection health
+            if self.ws_handler and not self.ws_handler.is_healthy:
+                return {
+                    'status': 'error',
+                    'message': 'WebSocket connection unhealthy'
+                }
+
+            # Check API client health
+            if self.api_client:
+                status = await self.api_client.get_market_status(trading_pair)
+                return status
+            
+            return {
+                'status': 'error',
+                'message': 'No API client available'
+            }
+
         except Exception as e:
             logger.error(f"Error checking market status: {e}")
             return {'status': 'error', 'message': str(e)}
@@ -157,17 +281,23 @@ class MarketDataManager:
     async def verify_data_freshness(self, trading_pair: str) -> bool:
         """Verify if market data is fresh enough."""
         try:
-            # Get current ticker to check timestamp
-            ticker = await self.get_ticker(trading_pair)
-            ticker_time = datetime.fromisoformat(ticker['time'].replace('Z', '+00:00'))
             current_time = datetime.now(timezone.utc)
             
-            # Check if ticker is recent (within last minute)
-            if current_time - ticker_time > timedelta(minutes=1):
-                logger.warning(f"Ticker data is stale for {trading_pair}")
+            # Check WebSocket connection health
+            if self.ws_handler and not self.ws_handler.is_healthy:
+                logger.warning("WebSocket connection is unhealthy")
                 return False
-                
-            # Check if we have recent candle data
+
+            # Check ticker freshness
+            if trading_pair in self.latest_tickers:
+                ticker_time = datetime.fromisoformat(
+                    self.latest_tickers[trading_pair]['time'].replace('Z', '+00:00')
+                )
+                if current_time - ticker_time > timedelta(minutes=1):
+                    logger.warning(f"Ticker data is stale for {trading_pair}")
+                    return False
+            
+            # Check candle data freshness
             last_update = self.last_update.get(trading_pair)
             if not last_update or current_time - last_update > timedelta(minutes=1):
                 logger.warning(f"Candle data is stale for {trading_pair}")
