@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 from typing import AsyncGenerator
 from asyncio import AbstractEventLoop
+from crypto_j_trader.src.trading.order_executor import OrderExecutor
 
 # Add project root to Python path
 project_root = Path(__file__).parent.parent.parent
@@ -33,7 +34,12 @@ def test_config():
             'key': 'test_key',
             'secret': 'test_secret'
         },
-        'paper_trading': True
+        'paper_trading': True,
+        'exchange': {
+            'api_key': 'test_api_key',
+            'base_url': 'https://api.testexchange.com',
+            'timeout': 30
+        }
     }
 
 @pytest.fixture
@@ -68,4 +74,29 @@ def mock_portfolio():
             'stop_loss': 2280.0,
             'unrealized_pnl': 1000.0
         }
+    }
+
+@pytest.fixture
+def mock_order_executor(test_config):
+    """Create a standardized OrderExecutor instance for testing."""
+    return OrderExecutor(
+        api_key=test_config['exchange']['api_key'],
+        base_url=test_config['exchange']['base_url'],
+        timeout=test_config['exchange']['timeout']
+    )
+
+@pytest.fixture
+def mock_filled_order():
+    """Mock order data for a filled order."""
+    return {
+        'id': 'test_order_1',
+        'product_id': 'BTC-USD',
+        'side': 'buy',
+        'type': 'market',
+        'size': '1.0',
+        'price': '50000.0',
+        'status': 'filled',
+        'filled_quantity': 1.0,
+        'remaining_quantity': 0.0,
+        'timestamp': '2024-01-28T00:00:00Z'
     }

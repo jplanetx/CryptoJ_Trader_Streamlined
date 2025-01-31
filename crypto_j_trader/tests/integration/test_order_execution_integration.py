@@ -2,72 +2,165 @@
 
 import pytest
 from decimal import Decimal
-from crypto_j_trader.src.trading.order_execution import OrderExecutor
+from crypto_j_trader.src.trading.order_executor import OrderExecutor
 from crypto_j_trader.src.trading.trading_core import TradingBot
 
 @pytest.fixture
-def trading_config():
+def test_config():
     """Test configuration."""
     return {
-        'trading_pairs': ['ETH-USD'],
-        'paper_trading': True,
+        'api_key': 'test_api_key',
+        'base_url': 'https://api.testexchange.com',
+        'timeout': 30,
+        'trading_pairs': ['ETH-USD', 'BTC-USD'],
         'risk_management': {
             'stop_loss_pct': 0.05,
-            'max_position_size': 0.1
+            'max_position_size': 1.0
         }
     }
 
 @pytest.fixture
-def order_executor():
-    """Create OrderExecutor instance in paper trading mode."""
+def order_executor(test_config):
+    """Create OrderExecutor instance."""
     return OrderExecutor(
-        exchange_client=None,
-        trading_pair='ETH-USD',
-        paper_trading=True
+        api_key=test_config['api_key'],
+        base_url=test_config['base_url'],
+        timeout=test_config['timeout']
     )
 
 @pytest.fixture
-def trading_bot(trading_config):
+def trading_bot(test_config):
     """Create TradingBot instance."""
-    return TradingBot(trading_config)
+    return TradingBot(test_config)
 
-def test_order_execution_success(order_executor):
-    """Test that a paper trading order is executed successfully."""
-    result = order_executor.execute_order(
-        side='buy',
-        size=Decimal('0.1'),
-        order_type='market'
+def test_end_to_end_trading_flow(order_executor):
+    """Test complete trading flow including position tracking."""
+    # Initial buy order
+    buy_result = order_executor.create_order(
+        symbol="ETH-USD",
+        side="buy",
+        quantity=0.5,
+        price=2000.0
+    )
+    assert buy_result["status"] == "success"
+    
+    # Verify position was created
+    position = order_executor.get_position("ETH-USD")
+    assert position is not None
+    assert position["quantity"] == 0.5
+    assert position["entry_price"] == 2000.0
+    
+    # Add to position
+    buy_result2 = order_executor.create_order(
+        symbol="ETH-USD",
+        side="buy",
+        quantity=0.3,
+        price=2100.0
+    )
+    assert buy_result2["status"] == "success"
+    
+    # Verify position was updated correctly
+    position = order_executor.get_position("ETH-USD")
+    assert position["quantity"] == 0.8
+    expected_avg_price = (0.5 * 2000.0 + 0.3 * 2100.0) / 0.8
+    assert abs(position["entry_price"] - expected_avg_price) < 0.01
+    
+    # Partial position reduction
+    sell_result = order_executor.create_order(
+        symbol="ETH-USD",
+        side="sell",
+        quantity=0.3,
+        price=2200.0
+    )
+    assert sell_result["status"] == "success"
+    
+    # Verify position was reduced
+    position = order_executor.get_position("ETH-USD")
+    assert position["quantity"] == 0.5
+    assert abs(position["entry_price"] - expected_avg_price) < 0.01
+
+def test_multi_pair_trading(order_executor):
+    """Test trading multiple pairs simultaneously."""
+    # Create ETH position
+    order_executor.create_order("ETH-USD", "buy", 1.0, 2000.0)
+    
+    # Create BTC position
+    order_executor.create_order("BTC-USD", "buy", 0.1, 50000.0)
+    
+    # Verify both positions exist
+    eth_pos = order_executor.get_position("ETH-USD")
+    btc_pos = order_executor.get_position("BTC-USD")
+    
+    assert eth_pos["quantity"] == 1.0
+    assert eth_pos["entry_price"] == 2000.0
+    assert btc_pos["quantity"] == 0.1
+    assert btc_pos["entry_price"] == 50000.0
+    
+    # Reduce ETH position
+    order_executor.create_order("ETH-USD", "sell", 0.5, 2100.0)
+    
+    # Close BTC position
+    order_executor.create_order("BTC-USD", "sell", 0.1, 52000.0)
+    
+    # Verify position updates
+    eth_pos = order_executor.get_position("ETH-USD")
+    btc_pos = order_executor.get_position("BTC-USD")
+    
+    assert eth_pos["quantity"] == 0.5
+    assert btc_pos is None
+
+def test_order_tracking(order_executor):
+    """Test order status tracking through lifecycle."""
+    # Create order
+    buy_result = order_executor.create_order(
+        symbol="ETH-USD",
+        side="buy",
+        quantity=1.0,
+        price=2000.0
+    )
+    order_id = buy_result["order_id"]
+    
+    # Check status
+    status = order_executor.get_order_status(order_id)
+    assert status["status"] == "filled"
+    assert status["filled_quantity"] == 1.0
+    assert status["remaining_quantity"] == 0.0
+    
+    # Cancel order
+    cancel_result = order_executor.cancel_order(order_id)
+    assert cancel_result["status"] == "success"
+    
+    # Verify order not found after cancellation
+    status = order_executor.get_order_status(order_id)
+    assert status["status"] == "error"
+    assert "Order not found" in status["message"]
+
+def test_error_handling(order_executor):
+    """Test error handling in trading flow."""
+    # Try to sell without position
+    result = order_executor.create_order(
+        symbol="ETH-USD",
+        side="sell",
+        quantity=1.0,
+        price=2000.0
+    )
+    assert result["status"] == "error"
+    assert "No position exists" in result["message"]
+    
+    # Create small position
+    order_executor.create_order(
+        symbol="ETH-USD",
+        side="buy",
+        quantity=0.5,
+        price=2000.0
     )
     
-    assert result['status'] == 'filled'
-    assert result['product_id'] == 'ETH-USD'
-    assert result['side'] == 'buy'
-    assert result['size'] == '0.1'
-
-def test_order_execution_limit_order(order_executor):
-    """Test executing a limit order in paper trading mode."""
-    result = order_executor.execute_order(
-        side='buy',
-        size=Decimal('0.1'),
-        order_type='limit',
-        limit_price=Decimal('2000.00')
+    # Try to sell more than position size
+    result = order_executor.create_order(
+        symbol="ETH-USD",
+        side="sell",
+        quantity=1.0,
+        price=2100.0
     )
-    
-    assert result['status'] == 'filled'
-    assert result['type'] == 'limit'
-    assert result['price'] == '2000.00'
-
-def test_order_execution_validation(order_executor):
-    """Test order validation."""
-    with pytest.raises(ValueError, match="Invalid order side"):
-        order_executor.execute_order(
-            side='invalid',
-            size=Decimal('0.1')
-        )
-    
-    with pytest.raises(ValueError, match="Limit price required"):
-        order_executor.execute_order(
-            side='buy',
-            size=Decimal('0.1'),
-            order_type='limit'
-        )
+    assert result["status"] == "error"
+    assert "Insufficient position size" in result["message"]
