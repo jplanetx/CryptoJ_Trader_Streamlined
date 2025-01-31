@@ -27,8 +27,10 @@ def run_command(cmd, cwd=None, env=None):
     return_code = process.wait()
     
     # Print any errors
-    for line in process.stderr:
-        print(line, end='', file=sys.stderr)
+    error_output = process.stderr.read()
+    if error_output:
+        print("ERROR OUTPUT:", file=sys.stderr)
+        print(error_output, file=sys.stderr)
         
     return return_code
 

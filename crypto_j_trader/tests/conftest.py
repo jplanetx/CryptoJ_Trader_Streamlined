@@ -25,8 +25,9 @@ def test_config():
         'trading_pairs': ['BTC-USD', 'ETH-USD'],
         'risk_management': {
             'stop_loss_pct': 0.05,
-            'max_position_size': 0.1,
-            'max_drawdown': 0.2
+            'max_position_size': 2.0,  # Increased to allow test orders of 1.0 BTC
+            'max_drawdown': 0.2,
+            'max_daily_loss': 1000.0  # Large value to prevent daily loss limit during tests
         },
         'api_keys': {
             'key': 'test_key',

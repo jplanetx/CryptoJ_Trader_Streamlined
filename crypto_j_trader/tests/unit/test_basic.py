@@ -2,6 +2,7 @@
 Basic functionality tests to verify testing infrastructure
 """
 import pytest
+from unittest.mock import patch
 from crypto_j_trader.src.trading.trading_core import TradingBot
 
 def test_trading_bot_init(test_config):
@@ -15,7 +16,8 @@ def test_trading_bot_init(test_config):
 async def test_get_empty_position(test_config):
     """Test getting position when none exists."""
     bot = TradingBot(test_config)
-    position = await bot.get_position()
+    trading_pair = 'BTC-USD'
+    position = await bot.get_position(trading_pair)
     assert position['size'] == 0.0
     assert position['entry_price'] == 0.0
     assert position['unrealized_pnl'] == 0.0

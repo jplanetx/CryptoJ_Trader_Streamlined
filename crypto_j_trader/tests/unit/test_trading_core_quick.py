@@ -13,8 +13,9 @@ def trading_config():
         'trading_pairs': ['BTC-USD'],
         'risk_management': {
             'stop_loss_pct': 0.05,
-            'max_position_size': 0.1,
-            'max_daily_loss': 0.02
+            'max_position_size': 20.0,  # Large enough for test orders
+            'max_drawdown': 0.2,
+            'max_daily_loss': 1000.0  # Large value to prevent daily loss limit during tests
         },
         'paper_trading': True,
         'api_keys': {
@@ -69,13 +70,19 @@ class TestPositionManagement:
     @pytest.mark.asyncio
     async def test_position_tracking(self, trading_bot):
         """Test position tracking through multiple trades."""
+        trading_pair = 'BTC-USD'
         # Open initial position
-        await trading_bot.execute_order('buy', 1.0, 50000.0, 'BTC-USD')
+        result = await trading_bot.execute_order('buy', 1.0, 50000.0, trading_pair)
+        assert result['status'] == 'success'
+        
+        position = await trading_bot.get_position(trading_pair)
+        assert position['size'] == 1.0
         
         # Add to position
-        await trading_bot.execute_order('buy', 0.5, 51000.0, 'BTC-USD')
+        result = await trading_bot.execute_order('buy', 0.5, 51000.0, trading_pair)
+        assert result['status'] == 'success'
         
-        position = await trading_bot.get_position('BTC-USD')
+        position = await trading_bot.get_position(trading_pair)
         assert position['size'] == 1.5
         assert position['entry_price'] == pytest.approx(50333.33, rel=1e-2)  # Weighted average
 
@@ -95,13 +102,20 @@ class TestRiskManagement:
     @pytest.mark.asyncio
     async def test_daily_loss_limit(self, trading_bot):
         """Test daily loss limit enforcement."""
-        # Set current daily loss near limit
-        trading_bot.daily_loss = trading_bot.config['risk_management']['max_daily_loss'] * 0.95
+        trading_pair = 'BTC-USD'
+        
+        # Open initial position
+        result = await trading_bot.execute_order('buy', 1.0, 50000.0, trading_pair)
+        assert result['status'] == 'success'
+        
+        # Simulate massive loss to trigger daily loss limit
+        # Note: Having daily_loss_limit high in config allows initial order, then we simulate loss
+        trading_bot.daily_loss = -50000.0  # Set a large loss
         
         # Try to open new position
-        result = await trading_bot.execute_order('buy', 0.1, 50000.0, 'BTC-USD')
+        result = await trading_bot.execute_order('buy', 0.1, 50000.0, trading_pair)
         assert result['status'] == 'error'
-        assert 'daily loss limit' in result.get('error', '').lower()
+        assert 'Daily loss limit reached' in result['error']
 
     @pytest.mark.asyncio
     async def test_emergency_shutdown(self, trading_bot):
