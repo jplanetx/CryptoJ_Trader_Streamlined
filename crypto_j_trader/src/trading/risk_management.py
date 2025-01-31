@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from datetime import datetime, timedelta
 import numpy as np
 
@@ -16,8 +16,13 @@ class RiskManager:
         self.correlation_weight = self.config.get('correlation_weight', 0.3)  # 30% weight for correlation
         self.volatility_weight = self.config.get('volatility_weight', 0.4)  # 40% weight for volatility
         self.min_position_size = self.config.get('min_position_size', 0.02)  # 2% minimum position size
+        self.max_positions = self.config.get('max_positions', 5)  # Maximum number of concurrent positions
+        self.max_exposure = self.config.get('max_exposure', 0.5)  # 50% maximum total exposure
+        
         self.daily_loss = 0.0
         self.last_reset = datetime.now()
+        self.active_positions: Dict[str, float] = {}  # symbol -> position size
+        self.emergency_mode = False
         
     def reset_daily_loss(self) -> None:
         """Reset daily loss tracking at market open"""
@@ -33,6 +38,63 @@ class RiskManager:
             logger.warning(f"Daily loss limit reached: {-self.daily_loss:.2f}")
             return False
         return True
+
+    def validate_new_position(self, symbol: str, size: float, portfolio_value: float) -> bool:
+        """Validate if a new position can be opened based on risk limits
+        
+        Args:
+            symbol: Trading symbol
+            size: Position size in base currency
+            portfolio_value: Current portfolio value
+        Returns:
+            bool: True if position is valid, False otherwise
+        """
+        # Check emergency mode
+        if self.emergency_mode:
+            logger.warning("Cannot open new position: Emergency mode active")
+            return False
+            
+        # Check position count limit
+        if len(self.active_positions) >= self.max_positions and symbol not in self.active_positions:
+            logger.warning(f"Maximum position count ({self.max_positions}) reached")
+            return False
+            
+        # Calculate total exposure including new position
+        total_exposure = sum(self.active_positions.values())
+        if symbol in self.active_positions:
+            total_exposure -= self.active_positions[symbol]
+        total_exposure += size
+        
+        # Check exposure limit
+        if total_exposure > portfolio_value * self.max_exposure:
+            logger.warning(f"Maximum exposure limit ({self.max_exposure*100}%) exceeded")
+            return False
+            
+        # Check individual position size limit
+        if size > portfolio_value * self.position_size_limit:
+            logger.warning(f"Position size limit ({self.position_size_limit*100}%) exceeded")
+            return False
+            
+        return True
+        
+    def update_position(self, symbol: str, size: float) -> None:
+        """Update tracked position size for a symbol"""
+        if size == 0:
+            self.active_positions.pop(symbol, None)
+        else:
+            self.active_positions[symbol] = size
+            
+    def get_total_exposure(self) -> float:
+        """Get total exposure across all positions"""
+        return sum(self.active_positions.values())
+        
+    def set_emergency_mode(self, enabled: bool) -> None:
+        """Enable or disable emergency mode"""
+        self.emergency_mode = enabled
+        if enabled:
+            logger.warning("Emergency mode activated - new positions blocked")
+        else:
+            logger.info("Emergency mode deactivated")
         
     def calculate_position_size(self, portfolio_value: float, volatility: float,
                               correlation_matrix: Optional[np.ndarray] = None) -> float:
@@ -45,6 +107,9 @@ class RiskManager:
         Returns:
             float: Recommended position size in base currency
         """
+        if self.emergency_mode:
+            return 0.0
+            
         # Base Kelly position sizing
         win_prob = 0.55  # Default win probability
         win_loss_ratio = 1.5  # Default win/loss ratio
@@ -73,7 +138,11 @@ class RiskManager:
             self.min_position_size
         )
         
-        return position_size * portfolio_value
+        # Check total exposure limit
+        remaining_exposure = (self.max_exposure * portfolio_value) - self.get_total_exposure()
+        position_size = min(position_size * portfolio_value, remaining_exposure)
+        
+        return position_size
         
     def calculate_atr(self, high_prices: np.ndarray, low_prices: np.ndarray, close_prices: np.ndarray, period: int = 14) -> float:
         """Calculate Average True Range for dynamic stop loss"""
@@ -109,7 +178,7 @@ class RiskManager:
         Args:
             entry_price: Entry price of the position
             high_prices: Recent high prices for ATR calculation
-            low_prices: Recent low prices for ATR calculation
+            low_prices: Recent low prices for ATR calculation  
             close_prices: Recent close prices for ATR calculation
         """
         if high_prices is not None and low_prices is not None and close_prices is not None:
