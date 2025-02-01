@@ -48,6 +48,7 @@ async def test_execute_buy_order(trading_bot, mock_order_executor):
     assert "order_id" in result
     mock_order_executor.create_order.assert_called_with("BTC-USD", "buy", Decimal("0.1"), Decimal("50000.0"))
     position = await trading_bot.get_position("BTC-USD")
+    assert isinstance(position['size'], float)
     assert position['size'] == 0.1
     assert position['entry_price'] == 50000.0
 
@@ -63,6 +64,7 @@ async def test_execute_sell_order(trading_bot, mock_order_executor):
     mock_order_executor.create_order.assert_called_with("BTC-USD", "sell", Decimal("0.1"), Decimal("51000.0"))
     
     position = await trading_bot.get_position("BTC-USD")
+    assert isinstance(position['size'], float)
     assert position['size'] == 0.1
     assert position['entry_price'] == 50000.0
 
@@ -71,26 +73,26 @@ async def test_execute_order_invalid_parameters(trading_bot):
     """Test order execution with invalid parameters"""
     result = await trading_bot.execute_order("invalid", 0.1, 50000.0, "BTC-USD")
     assert result['status'] == 'error'
-    assert "Invalid order parameters: side must be buy or sell" in result['error']
+    assert "Invalid side" in result['message']
     
     result = await trading_bot.execute_order("buy", 0, 50000.0, "BTC-USD")
     assert result['status'] == 'error'
-    assert "Invalid order parameters: size must be positive" in result['error']
+    assert "Invalid size" in result['message']
 
     result = await trading_bot.execute_order("buy", 0.1, -50000.0, "BTC-USD")
     assert result['status'] == 'error'
-    assert "Invalid order parameters: price must be non-negative" in result['error']
+    assert "Invalid price" in result['message']
 
     result = await trading_bot.execute_order("buy", 0.1, 50000.0, "INVALID-USD")
     assert result['status'] == 'error'
-    assert "Invalid trading pair: INVALID-USD" in result['error']
+    assert "Invalid symbol" in result['message']
 
 @pytest.mark.asyncio
 async def test_execute_order_position_limit(trading_bot):
     """Test order execution exceeding position limit"""
     result = await trading_bot.execute_order("buy", 11.0, 50000.0, "BTC-USD")
     assert result['status'] == 'error'
-    assert "Position size limit exceeded" in result['error']
+    assert "Position size limit exceeded" in result['message']
 
 
 @pytest.mark.asyncio

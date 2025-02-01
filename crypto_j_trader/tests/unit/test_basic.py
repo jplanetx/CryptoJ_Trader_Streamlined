@@ -42,5 +42,5 @@ async def test_health_check(test_config):
     """Test basic health check."""
     bot = TradingBot(test_config)
     health_status = await bot.check_health()
-    assert health_status is True
+    assert health_status['status'] == 'healthy'
     assert bot.last_health_check is not None

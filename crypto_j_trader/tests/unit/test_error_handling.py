@@ -32,7 +32,7 @@ def test_negative_quantity(order_executor):
 def test_invalid_order_type(order_executor):
     """Test invalid order type handling"""
     result = order_executor.create_order("BTC-USD", "invalid", 0.1, 50000.0)
-    assert result["status"] == "success"  # Basic implementation doesn't validate order type yet
+    assert result["status"] == "error"
 
 def test_error_recovery(order_executor):
     """Test error recovery flow"""

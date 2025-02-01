@@ -237,7 +237,7 @@ class TradingBot:
         self.last_health_check = datetime.now()
         
         health_status = {
-            'status': 'healthy' if self.is_healthy else 'unhealthy',
+            'status': 'healthy' if self.is_healthy and not self.shutdown_requested else 'unhealthy',
             'last_check': self.last_health_check.isoformat(),
             'api_status': True,  # Placeholder
             'metrics': {

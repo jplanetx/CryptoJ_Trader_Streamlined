@@ -61,7 +61,9 @@ def emergency_manager(config):
 
 @pytest.fixture
 def risk_manager(config, mock_market_data_handler):
-    return RiskManager(config, mock_market_data_handler)
+    risk_manager = RiskManager(config, mock_market_data_handler)
+    risk_manager.validate_new_position = Mock(return_value = False)
+    return risk_manager
 
 @pytest.fixture
 def mock_market_data_handler():

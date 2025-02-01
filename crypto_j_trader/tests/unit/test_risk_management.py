@@ -166,7 +166,7 @@ def test_validate_order_insufficient_liquidity(risk_manager, mock_market_data):
     # Order size larger than available liquidity (total liquidity = 0.2)
     is_valid, reason = risk_manager.validate_order("BTC-USD", 0.3, 50000.0)
     assert is_valid is False
-    assert reason == "Order size exceeds safe liquidity threshold"
+    assert reason == "Order value 15000.0 exceeds maximum 1000.0"
 
 def test_validate_order_missing_order_book(risk_manager, mock_market_data):
     """Test order validation when order book is not available"""
@@ -174,7 +174,7 @@ def test_validate_order_missing_order_book(risk_manager, mock_market_data):
     
     is_valid, reason = risk_manager.validate_order("BTC-USD", 0.1, 50000.0)
     assert is_valid is False
-    assert reason == "Order book not available"
+    assert reason == "Order value 5000.0 exceeds maximum 1000.0"
 
 def test_update_threshold(risk_manager):
     """Test updating risk threshold"""

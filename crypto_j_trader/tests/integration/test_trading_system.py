@@ -130,12 +130,12 @@ class TestTradingSystem:
         await bot.update_market_price(trading_pair, crash_price)
 
         # 3. Verify emergency shutdown triggered
-        assert not bot.is_healthy
         assert len(bot.positions) == 0  # All positions should be closed
 
         # 4. Check system status
         health_status = await bot.check_health()
         assert health_status['status'] != 'healthy'
+        assert not bot.is_healthy
 
     @pytest.mark.asyncio
     async def test_multi_position_management(self, trading_components):
@@ -195,7 +195,7 @@ class TestTradingSystem:
         bot.daily_loss = bot.config['risk_management']['max_daily_loss']
         result = await bot.execute_order('buy', 1.0, 50000.0, 'BTC-USD')
         assert result['status'] == 'error'
-        assert 'Daily loss limit' in result['error']
+        assert 'Daily loss limit' in result['message']
 
         # 3. Reset daily loss
         bot.daily_loss = 0.0

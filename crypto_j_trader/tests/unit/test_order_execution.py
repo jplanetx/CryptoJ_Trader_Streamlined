@@ -73,6 +73,7 @@ def test_paper_trade_market_order(paper_order_executor):
 
 def test_paper_trade_limit_order(paper_order_executor):
   """Test paper trade limit order execution"""
+  paper_order_executor.initialize_position("BTC-USD", Decimal("0.1"), Decimal("49000.0"))
   result = paper_order_executor.execute_order("sell", Decimal("0.1"), "limit", Decimal("50000.0"))
   assert result["id"] == "paper_trade"
   assert result["status"] == "filled"

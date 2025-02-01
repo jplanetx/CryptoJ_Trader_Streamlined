@@ -73,7 +73,8 @@ async def test_get_position_after_order(config):
 @pytest.mark.asyncio
 async def test_check_health(config):
     bot = TradingBot(config)
-    assert await bot.check_health() is True
+    health_status = await bot.check_health()
+    assert health_status['status'] == 'healthy'
     assert bot.last_health_check is not None
 
 @pytest.mark.asyncio

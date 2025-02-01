@@ -76,9 +76,9 @@ async def test_trading_flow_with_invalid_orders(trading_bot):
     # Execute invalid buy order
     buy_result = await trading_bot.execute_order('buy', -1.0, 50000.0, trading_pair)
     assert buy_result['status'] == 'error'
-    assert 'Invalid order parameters' in buy_result.get('error', '')
+    assert 'Invalid size' in buy_result.get('message', '')
 
     # Execute invalid sell order
     sell_result = await trading_bot.execute_order('sell', 0.0, 55000.0, trading_pair)
     assert sell_result['status'] == 'error'
-    assert 'Invalid order parameters' in sell_result.get('error', '')
+    assert 'Invalid size' in sell_result.get('message', '')

@@ -22,15 +22,15 @@ class TestHealthMonitor:
         """Test order latency recording."""
         start_time = time.time() - 0.1  # Simulate 100ms latency
         latency = health_monitor.record_order_latency(start_time)
-        assert latency >= 100  # At least 100ms
-        assert health_monitor.trading_metrics['order_latency_ms'] >= 100
+        assert latency == pytest.approx(100, abs = 1)  # At least 100ms
+        assert health_monitor.trading_metrics['order_latency_ms'] == pytest.approx(100, abs=1)
 
     def test_record_market_data_delay(self, health_monitor):
         """Test market data delay recording."""
         data_time = time.time() - 0.05  # Simulate 50ms delay
         delay = health_monitor.record_market_data_delay(data_time)
-        assert delay >= 50  # At least 50ms
-        assert health_monitor.trading_metrics['market_data_delay_ms'] >= 50
+        assert delay == pytest.approx(50, abs=1)  # At least 50ms
+        assert health_monitor.trading_metrics['market_data_delay_ms'] == pytest.approx(50, abs=1)
 
     def test_record_websocket_reconnect(self, health_monitor):
         """Test WebSocket reconnection recording."""
@@ -74,7 +74,7 @@ class TestHealthMonitor:
         health_monitor.system_metrics['cpu_percent'] = 90.0
         result = health_monitor.check_system_health()
         assert result['status'] == 'degraded'
-        assert any('CPU usage' in alert for alert in result['alerts'])
+        assert any('High CPU usage detected' in alert for alert in result['alerts'])
 
     def test_metrics_history_maintenance(self, health_monitor):
         """Test metrics history maintenance."""
