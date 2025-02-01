@@ -231,6 +231,7 @@ class TradingBot:
                 )
         
         self.is_healthy = False
+        return {'status': 'success'}
 
     async def check_health(self) -> Dict[str, Any]:
         """Check system health status."""
