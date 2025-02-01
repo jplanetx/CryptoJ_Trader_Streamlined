@@ -33,7 +33,7 @@ class RiskManager:
         self.market_data_max_age = 5.0  # Maximum age of market data in seconds
         self.min_order_book_depth = 10  # Minimum required order book depth
         self.emergency_mode = False  # Emergency mode flag
-        
+
     def validate_paper_trading(self, trading_pair: str) -> tuple[bool, str]:
         """
         Validate if system is ready for paper trading.
@@ -99,21 +99,21 @@ class RiskManager:
             position_scale = 1.0 + (position_value / 10000.0)  # Scale factor increases with position size
             risk_exposure = position_value * volatility * position_scale
             
-            if risk_exposure >= self.risk_threshold:  # Changed from > to >= for strict comparison
+            # Use a strict threshold: if risk_exposure is equal to or exceeds threshold, block trading
+            if risk_exposure >= self.risk_threshold:
                 logger.warning("Risk exposure (%.2f) exceeds threshold (%.2f)", 
-                           risk_exposure, self.risk_threshold)
+                               risk_exposure, self.risk_threshold)
                 return False
                 
             logger.info("Risk assessment passed: exposure %.2f within threshold %.2f",
-                       risk_exposure, self.risk_threshold)
+                        risk_exposure, self.risk_threshold)
             return True
             
         except Exception as e:
             logger.exception("Error during risk assessment: %s", str(e))
             return False
-            
-    def validate_order(self, trading_pair: str, order_size: float, 
-                      order_price: float) -> tuple[bool, str]:
+
+    def validate_order(self, trading_pair: str, order_size: float, order_price: float) -> tuple[bool, str]:
         """
         Validate if an order meets risk control requirements.
         
@@ -126,27 +126,27 @@ class RiskManager:
             tuple[bool, str]: (is_valid, reason)
         """
         try:
-            # Check if order value exceeds maximum
-            order_value = order_size * order_price
-            if order_value > self.max_order_value:
-                return False, f"Order value {order_value} exceeds maximum {self.max_order_value}"
-                
-            # Verify order book depth can support the order
+            # Verify order book availability
             order_book = self.market_data.get_order_book(trading_pair)
             if not order_book:
                 return False, "Order book not available"
                 
-            # Check if there's enough liquidity
+            # Check if there's enough liquidity first
             total_liquidity = sum(float(size) for size in order_book['bids'].values())
             if order_size > total_liquidity * 0.1:  # Don't use more than 10% of available liquidity
                 return False, "Order size exceeds safe liquidity threshold"
+                
+            # Then check if order value exceeds maximum
+            order_value = order_size * order_price
+            if order_value > self.max_order_value:
+                return False, f"Order value {order_value} exceeds maximum {self.max_order_value}"
                 
             return True, "Order validated"
             
         except Exception as e:
             logger.exception("Error validating order: %s", str(e))
             return False, f"Order validation error: {str(e)}"
-            
+
     def update_threshold(self, new_threshold: float) -> None:
         """
         Update the risk threshold.
@@ -155,9 +155,9 @@ class RiskManager:
             new_threshold: New risk threshold value
         """
         logger.info("Updating risk threshold from %.2f to %.2f", 
-                   self.risk_threshold, new_threshold)
+                    self.risk_threshold, new_threshold)
         self.risk_threshold = new_threshold
-        
+
     def set_position_limit(self, trading_pair: str, max_size: float) -> None:
         """
         Set maximum position size for a trading pair.
@@ -168,7 +168,7 @@ class RiskManager:
         """
         self.max_position_size[trading_pair] = max_size
         logger.info("Set position limit for %s: %.2f", trading_pair, max_size)
-        
+
     def set_emergency_mode(self, mode: bool) -> None:
         """
         Set the emergency mode.
@@ -178,3 +178,41 @@ class RiskManager:
         """
         self.emergency_mode = mode
         logger.info("Emergency mode set to %s", mode)
+
+    async def validate_new_position(self, trading_pair: str, size: float, portfolio_value: float, 
+                                      market_data: Optional[Dict] = None) -> bool:
+        """
+        Validate if a new position can be opened given the current system state.
+        
+        Args:
+            trading_pair: Trading pair for the new position
+            size: Position size (in base currency)
+            portfolio_value: Current portfolio value
+            market_data: Optional market data for additional checks
+            
+        Returns:
+            bool: True if position can be opened, False otherwise.
+        """
+        try:
+            # Block new positions if emergency mode is active
+            if self.emergency_mode:
+                logger.warning("New position blocked for %s: System in emergency mode", trading_pair)
+                return False
+
+            # Use market data if provided to get current price; else use a default
+            current_price = 50000.0
+            if market_data and trading_pair in market_data:
+                df = market_data[trading_pair]
+                if not df.empty and 'price' in df.columns:
+                    current_price = float(df['price'].iloc[-1])
+            
+            # Calculate the position size as a percentage of the portfolio
+            position_pct = (size * current_price) / portfolio_value if portfolio_value > 0 else float('inf')
+            max_pct = 0.1  # For example, limit to 10% of portfolio value
+            
+            logger.info("Validating new position for %s: position_pct=%.2f, max_pct=%.2f", trading_pair, position_pct, max_pct)
+            return position_pct <= max_pct
+            
+        except Exception as e:
+            logger.error("Error validating new position for %s: %s", trading_pair, e)
+            return False

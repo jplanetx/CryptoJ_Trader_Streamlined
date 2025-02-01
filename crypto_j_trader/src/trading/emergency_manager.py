@@ -1,4 +1,6 @@
-"""Emergency management system for cryptocurrency trading"""
+"""
+Emergency management system for cryptocurrency trading
+"""
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, Optional, Any
@@ -38,7 +40,7 @@ class EmergencyManager:
                               portfolio_value: float,
                               market_data: Optional[Dict] = None) -> bool:
         """
-        Validate if a new position can be opened given current system state
+        Validate if a new position can be opened given current system state.
         
         Args:
             pair: Trading pair
@@ -64,33 +66,30 @@ class EmergencyManager:
                 return False
 
             # Get current price for position size calculation
-            current_price = self.default_btc_price  # Default price for basic validation
-                
-            # Validate against market conditions if data available
+            current_price = self.default_btc_price
             if market_data and pair in market_data:
                 data = market_data[pair]
-                
-                # Check data freshness
-                if not self._check_data_freshness(data):
-                    logger.warning(f"New position blocked for {pair}: Stale market data")
-                    return False
+                if not data.empty and 'price' in data.columns:
+                    current_price = float(data['price'].iloc[-1])
                     
-                # Update current price from market data
-                current_price = float(data['price'].iloc[-1])
-                
-                # Check for extreme market conditions
-                if self._check_price_movement(data, current_price):
-                    logger.warning(f"New position blocked for {pair}: Extreme price movement")
-                    return False
+                    # Check data freshness
+                    if not self._check_data_freshness(data):
+                        logger.warning(f"New position blocked for {pair}: Stale market data")
+                        return False
                     
-                if self._check_volume_spike(data):
-                    logger.warning(f"New position blocked for {pair}: Volume spike detected")
-                    return False
+                    # Check for extreme market conditions
+                    if self._check_price_movement(data, current_price):
+                        logger.warning(f"New position blocked for {pair}: Extreme price movement")
+                        return False
+                        
+                    if self._check_volume_spike(data):
+                        logger.warning(f"New position blocked for {pair}: Volume spike detected")
+                        return False
             
             # Calculate position size as percentage of portfolio
             position_size_pct = (size * current_price) / portfolio_value if portfolio_value > 0 else float('inf')
             
-            # Check against position size limit from config
+            # Check against position size limit from config (default to 10%)
             max_position_size = self.config.get('risk_management', {}).get('position_size_limit', 0.1)
             if position_size_pct > max_position_size:
                 logger.warning(f"New position blocked for {pair}: Position size {position_size_pct:.2%} exceeds limit {max_position_size:.2%}")
@@ -106,7 +105,7 @@ class EmergencyManager:
     def load_state(self) -> None:
         """Load persisted emergency state"""
         try:
-            if os.path.exists(self.state_file):
+            if os.path.exists(self.state_file) and os.path.getsize(self.state_file) > 0:
                 with open(self.state_file, 'r') as f:
                     state = json.load(f)
                     self.emergency_shutdown = state.get('emergency_shutdown', False)
