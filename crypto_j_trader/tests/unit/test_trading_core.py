@@ -98,22 +98,28 @@ async def test_execute_order_position_limit(trading_bot):
 @pytest.mark.asyncio
 async def test_check_health(trading_bot, mock_market_data_handler):
     """Test system health check"""
-    assert (await trading_bot.check_health())['status'] == 'healthy'
+    health_status = await trading_bot.check_health()
+    assert health_status['status'] == 'healthy'
 
     mock_market_data_handler.is_data_fresh.return_value = False
-    assert (await trading_bot.check_health())['status'] == 'unhealthy'
+    health_status = await trading_bot.check_health()
+    assert health_status['status'] == 'unhealthy'
 
     mock_market_data_handler._ws_handler.is_connected = False
-    assert (await trading_bot.check_health())['status'] == 'unhealthy'
+    health_status = await trading_bot.check_health()
+    assert health_status['status'] == 'unhealthy'
 
     trading_bot.positions = None
-    assert (await trading_bot.check_health())['status'] == 'unhealthy'
+    health_status = await trading_bot.check_health()
+    assert health_status['status'] == 'unhealthy'
 
     trading_bot.daily_stats = None
-    assert (await trading_bot.check_health())['status'] == 'unhealthy'
+    health_status = await trading_bot.check_health()
+    assert health_status['status'] == 'unhealthy'
 
     trading_bot.config = None
-    assert (await trading_bot.check_health())['status'] == 'unhealthy'
+    health_status = await trading_bot.check_health()
+    assert health_status['status'] == 'unhealthy'
 
 @pytest.mark.asyncio
 async def test_emergency_shutdown(trading_bot):
