@@ -103,7 +103,7 @@ class TradingBot:
                       return {'status': 'error', 'message': 'Insufficient position size'}
                     position['size'] -= size
                     if position['size'] == 0:
-                        position['entry_price'] = 0
+                        del self.positions[symbol]
                 elif position['size'] <= 0:
                     position['size'] -= size # selling short
                     if position['size'] < 0:

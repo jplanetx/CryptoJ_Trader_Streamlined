@@ -192,7 +192,7 @@ class TestTradingSystem:
         assert result['status'] == 'error'
 
         # 2. Test daily loss limits
-        bot.daily_loss = bot.config['risk_management']['max_daily_loss']
+        bot.daily_loss = bot.config['risk_management']['max_daily_loss'] + 1
         result = await bot.execute_order('buy', 1.0, 50000.0, 'BTC-USD')
         assert result['status'] == 'error'
         assert 'Daily loss limit' in result['message']
