@@ -1,155 +1,177 @@
-"""
-Comprehensive tests for TradingBot functionality
-"""
 import pytest
+from unittest.mock import AsyncMock, MagicMock
+import asyncio
+from datetime import datetime, timezone
 from decimal import Decimal
-from unittest.mock import AsyncMock, patch
+
 from crypto_j_trader.src.trading.trading_core import TradingBot
 
 @pytest.fixture
-def trading_bot(test_config):
-    """Create TradingBot instance with test configuration."""
-    return TradingBot(test_config)
+def mock_config():
+    return {
+        'trading_pairs': ['BTC-USD', 'ETH-USD'],
+        'risk_management': {
+            'max_position_size': 10.0,
+            'max_daily_loss': 100.0
+        }
+    }
 
-class TestInitialization:
-    def test_init_basic(self, test_config):
-        """Test basic initialization."""
-        bot = TradingBot(test_config)
-        assert bot.config == test_config
-        assert bot.is_healthy is True
-        assert not bot.shutdown_requested
-        assert isinstance(bot.positions, dict)
+@pytest.fixture
+def mock_order_executor():
+    mock = AsyncMock()
+    mock.create_order.return_value = {'id': 'test_order_id'}
+    return mock
 
-    def test_init_missing_config(self):
-        """Test initialization with missing config."""
-        with pytest.raises(TypeError):
-            TradingBot()
+@pytest.fixture
+def mock_market_data_handler():
+    mock = MagicMock()
+    mock.is_data_fresh.return_value = True
+    mock._ws_handler = MagicMock()
+    mock._ws_handler.is_connected = True
+    return mock
 
-class TestOrderExecution:
-    @pytest.mark.asyncio
-    async def test_buy_order(self, trading_bot):
-        """Test buy order execution."""
-        result = await trading_bot.execute_order('buy', 1.0, 50000.0, 'BTC-USD')
-        assert result['status'] == 'success'
-        assert 'order_id' in result
-        
-        position = await trading_bot.get_position('BTC-USD')
-        assert position['size'] == 1.0
-        assert position['entry_price'] == 50000.0
-        assert position['stop_loss'] == 47500.0  # 5% below entry
 
-    @pytest.mark.asyncio
-    async def test_sell_order(self, trading_bot):
-        """Test sell order execution."""
-        result = await trading_bot.execute_order('sell', 0.5, 51000.0, 'BTC-USD')
-        assert result['status'] == 'success'
-        assert 'order_id' in result
-        
-        position = await trading_bot.get_position('BTC-USD')
-        assert position['size'] == -0.5
-        assert position['entry_price'] == 51000.0
-        assert position['stop_loss'] == 53550.0  # 5% above entry
+@pytest.fixture
+def trading_bot(mock_config, mock_order_executor, mock_market_data_handler):
+    return TradingBot(
+        config=mock_config,
+        order_executor=mock_order_executor,
+        market_data_handler = mock_market_data_handler
+    )
 
-    @pytest.mark.asyncio
-    async def test_invalid_order(self, trading_bot):
-        """Test order with invalid parameters."""
-        trading_pair = 'BTC-USD'
-        # Test with invalid side
-        result = await trading_bot.execute_order('invalid', 1.0, 50000.0, trading_pair)
-        assert result['status'] == 'error'
-        assert 'Invalid order parameters' in result.get('error', '')
-        
-        # Test with invalid size
-        result = await trading_bot.execute_order('buy', -1.0, 50000.0, trading_pair)
-        assert result['status'] == 'error'
-        assert 'Invalid order parameters' in result.get('error', '')
 
-class TestPositionManagement:
-    @pytest.mark.asyncio
-    async def test_multiple_positions(self, trading_bot):
-        """Test managing multiple positions."""
-        # Open BTC position and verify
-        btc_pair = 'BTC-USD'
-        result = await trading_bot.execute_order('buy', 1.0, 50000.0, btc_pair)
-        assert result['status'] == 'success'
-        
-        btc_pos = await trading_bot.get_position(btc_pair)
-        assert btc_pos['size'] == 1.0
-        assert btc_pos['entry_price'] == 50000.0
+@pytest.mark.asyncio
+async def test_execute_buy_order(trading_bot, mock_order_executor):
+    """Test executing a buy order"""
+    result = await trading_bot.execute_order("buy", 0.1, 50000.0, "BTC-USD")
+    assert result['status'] == 'success'
+    assert "order_id" in result
+    mock_order_executor.create_order.assert_called_with("BTC-USD", "buy", Decimal("0.1"), Decimal("50000.0"))
+    position = await trading_bot.get_position("BTC-USD")
+    assert position['size'] == 0.1
+    assert position['entry_price'] == 50000.0
 
-        # Open ETH position and verify
-        eth_pair = 'ETH-USD'
-        result = await trading_bot.execute_order('buy', 1.5, 2500.0, eth_pair)
-        assert result['status'] == 'success'
-        
-        eth_pos = await trading_bot.get_position(eth_pair)
-        assert eth_pos['size'] == 1.5
-        assert eth_pos['entry_price'] == 2500.0
+@pytest.mark.asyncio
+async def test_execute_sell_order(trading_bot, mock_order_executor):
+    """Test executing a sell order"""
+    # First create a buy order to get a position
+    await trading_bot.execute_order("buy", 0.2, 50000.0, "BTC-USD")
 
-    @pytest.mark.asyncio
-    async def test_position_modification(self, trading_bot):
-        """Test modifying existing position."""
-        trading_pair = 'BTC-USD'
-        # Initial position
-        result = await trading_bot.execute_order('buy', 1.0, 50000.0, trading_pair)
-        assert result['status'] == 'success'
-        
-        position = await trading_bot.get_position(trading_pair)
-        assert position['size'] == 1.0
-        assert position['entry_price'] == 50000.0
-        
-        # Add to position
-        result = await trading_bot.execute_order('buy', 0.5, 51000.0, trading_pair)
-        assert result['status'] == 'success'
-        
-        position = await trading_bot.get_position(trading_pair)
-        assert position['size'] == 1.5
-        # Check weighted average entry price
-        expected_entry = (50000.0 * 1.0 + 51000.0 * 0.5) / 1.5
-        assert position['entry_price'] == pytest.approx(expected_entry)
+    result = await trading_bot.execute_order("sell", 0.1, 51000.0, "BTC-USD")
+    assert result['status'] == 'success'
+    assert "order_id" in result
+    mock_order_executor.create_order.assert_called_with("BTC-USD", "sell", Decimal("0.1"), Decimal("51000.0"))
+    
+    position = await trading_bot.get_position("BTC-USD")
+    assert position['size'] == 0.1
+    assert position['entry_price'] == 50000.0
 
-class TestRiskManagement:
-    @pytest.mark.asyncio
-    async def test_stop_loss_calculation(self, trading_bot):
-        """Test stop loss calculations."""
-        await trading_bot.execute_order('buy', 1.0, 50000.0, 'BTC-USD')
-        position = await trading_bot.get_position('BTC-USD')
-        
-        # 5% stop loss from config
-        expected_stop = 50000.0 * 0.95
-        assert position['stop_loss'] == expected_stop
+@pytest.mark.asyncio
+async def test_execute_order_invalid_parameters(trading_bot):
+    """Test order execution with invalid parameters"""
+    result = await trading_bot.execute_order("invalid", 0.1, 50000.0, "BTC-USD")
+    assert result['status'] == 'error'
+    assert "Invalid order parameters: side must be buy or sell" in result['error']
+    
+    result = await trading_bot.execute_order("buy", 0, 50000.0, "BTC-USD")
+    assert result['status'] == 'error'
+    assert "Invalid order parameters: size must be positive" in result['error']
 
-    @pytest.mark.asyncio
-    async def test_emergency_shutdown(self, trading_bot):
-        """Test emergency shutdown procedure."""
-        # Setup positions
-        await trading_bot.execute_order('buy', 1.0, 50000.0, 'BTC-USD')
-        await trading_bot.execute_order('buy', 1.5, 2500.0, 'ETH-USD')
-        
-        # Trigger shutdown
-        await trading_bot.emergency_shutdown()
-        
-        assert trading_bot.shutdown_requested
-        assert not trading_bot.is_healthy
-        assert len(trading_bot.positions) == 0
+    result = await trading_bot.execute_order("buy", 0.1, -50000.0, "BTC-USD")
+    assert result['status'] == 'error'
+    assert "Invalid order parameters: price must be non-negative" in result['error']
 
-class TestSystemHealth:
-    @pytest.mark.asyncio
-    async def test_health_check_success(self, trading_bot):
-        """Test successful health check."""
-        trading_bot.api_client = AsyncMock()
-        trading_bot.api_client.get_server_time = AsyncMock(return_value={"serverTime": 1234567890000})
-        
-        health_status = await trading_bot.check_health()
-        assert health_status is True
-        assert trading_bot.last_health_check is not None
+    result = await trading_bot.execute_order("buy", 0.1, 50000.0, "INVALID-USD")
+    assert result['status'] == 'error'
+    assert "Invalid trading pair: INVALID-USD" in result['error']
 
-    @pytest.mark.asyncio
-    async def test_health_check_failure(self, trading_bot):
-        """Test health check failure."""
-        trading_bot.api_client = AsyncMock()
-        trading_bot.api_client.get_server_time = AsyncMock(side_effect=Exception("API Error"))
-        
-        health_status = await trading_bot.check_health()
-        assert health_status is False
-        assert not trading_bot.is_healthy
+@pytest.mark.asyncio
+async def test_execute_order_position_limit(trading_bot):
+    """Test order execution exceeding position limit"""
+    result = await trading_bot.execute_order("buy", 11.0, 50000.0, "BTC-USD")
+    assert result['status'] == 'error'
+    assert "Position size limit exceeded" in result['error']
+
+
+@pytest.mark.asyncio
+async def test_check_health(trading_bot, mock_market_data_handler):
+    """Test system health check"""
+    assert await trading_bot.check_health() == True
+
+    mock_market_data_handler.is_data_fresh.return_value = False
+    assert await trading_bot.check_health() == False
+
+    mock_market_data_handler._ws_handler.is_connected = False
+    assert await trading_bot.check_health() == False
+
+    trading_bot.positions = None
+    assert await trading_bot.check_health() == False
+
+    trading_bot.daily_stats = None
+    assert await trading_bot.check_health() == False
+
+    trading_bot.config = None
+    assert await trading_bot.check_health() == False
+
+@pytest.mark.asyncio
+async def test_emergency_shutdown(trading_bot):
+    """Test emergency shutdown"""
+    result = await trading_bot.emergency_shutdown()
+    assert result['status'] == 'success'
+    assert trading_bot.shutdown_requested == True
+
+@pytest.mark.asyncio
+async def test_reset_daily_stats(trading_bot):
+    """Test resetting daily statistics"""
+    trading_bot.daily_loss = 100.0
+    trading_bot.daily_trades_count = 10
+    trading_bot.daily_volume = 5000.0
+    trading_bot.daily_stats['peak_pnl'] = 50.0
+    trading_bot.daily_stats['lowest_pnl'] = -10.0
+    trading_bot.daily_stats['total_fees'] = 1.0
+    trading_bot.daily_stats['win_count'] = 5
+    trading_bot.daily_stats['loss_count'] = 5
+    await trading_bot.reset_daily_stats()
+    assert trading_bot.daily_loss == 0.0
+    assert trading_bot.daily_trades_count == 0
+    assert trading_bot.daily_volume == 0.0
+    assert trading_bot.daily_stats['peak_pnl'] == 0.0
+    assert trading_bot.daily_stats['lowest_pnl'] == 0.0
+    assert trading_bot.daily_stats['total_fees'] == 0.0
+    assert trading_bot.daily_stats['win_count'] == 0
+    assert trading_bot.daily_stats['loss_count'] == 0
+
+@pytest.mark.asyncio
+async def test_get_daily_stats(trading_bot):
+    """Test getting daily statistics"""
+    trading_bot.daily_loss = 50.0
+    trading_bot.daily_trades_count = 10
+    trading_bot.daily_stats['win_count'] = 6
+    stats = await trading_bot.get_daily_stats()
+    assert stats['pnl']['current'] == -50.0
+    assert stats['trades']['count'] == 10
+    assert stats['trades']['win_rate'] == 60.0
+    assert stats['fees'] == 0.0 # default value
+
+@pytest.mark.asyncio
+async def test_get_system_status(trading_bot, mock_market_data_handler):
+    """Test getting system status"""
+    status = await trading_bot.get_system_status()
+    assert status['trading']['active'] == True
+    assert status['trading']['health'] == {'status': 'healthy'}
+    assert status['positions']['count'] == 0
+
+    mock_market_data_handler.is_data_fresh.return_value = False
+    status = await trading_bot.get_system_status()
+    assert status['trading']['health'] == {'status': 'unhealthy'}
+
+@pytest.mark.asyncio
+async def test_reset_system(trading_bot):
+    """Test resetting the system"""
+    trading_bot.positions = {"BTC-USD": {"size": 0.1, "entry_price": 50000.0}}
+    trading_bot.market_prices = {"BTC-USD": 51000.0}
+    result = await trading_bot.reset_system()
+    assert result['status'] == 'success'
+    assert trading_bot.shutdown_requested == False
+    assert len(trading_bot.positions) == 0
+    assert len(trading_bot.market_prices) == 0

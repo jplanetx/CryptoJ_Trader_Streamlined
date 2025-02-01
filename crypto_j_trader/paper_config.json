@@ -1,0 +1,26 @@
+{
+  "mode": "paper",
+  "order_execution": {
+    "retry_attempts": 3,
+    "timeout_seconds": 10
+  },
+  "risk_management": {
+    "risk_threshold": 10000.0,
+    "alert_email": "trader@example.com"
+  },
+  "market_data": {
+    "provider": "default",
+    "update_interval_seconds": 5
+  },
+  "monitoring": {
+    "enabled": true,
+    "log_level": "INFO"
+  },
+  "launch_checklist": [
+    "Verify all critical tests passing",
+    "Confirm risk controls validated",
+    "Ensure market data consistency checks are in place",
+    "Ensure system monitoring operational",
+    "Confirm paper trading configuration ready"
+  ]
+}

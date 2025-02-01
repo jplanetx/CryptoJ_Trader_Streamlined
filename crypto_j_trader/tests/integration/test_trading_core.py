@@ -37,14 +37,17 @@ async def test_execute_order_buy(config):
 async def test_execute_order_sell(config):
     bot = TradingBot(config)
     trading_pair = 'BTC-USD'
+    # Initialize a position to sell from
+    await bot.execute_order('buy', 10, 100, trading_pair)
     result = await bot.execute_order('sell', 5, 200, trading_pair)
     assert result['status'] == 'success'
     assert 'order_id' in result
     
     position = await bot.get_position(trading_pair)
-    assert position['size'] == -5
-    assert position['entry_price'] == 200
-    assert position['stop_loss'] == 210.0
+    assert position['size'] == 5
+    assert position['entry_price'] == 100
+    assert position['stop_loss'] == 95.0
+
 
 @pytest.mark.asyncio
 async def test_get_position_empty(config):

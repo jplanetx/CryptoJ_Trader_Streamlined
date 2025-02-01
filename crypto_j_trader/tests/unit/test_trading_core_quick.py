@@ -68,6 +68,33 @@ class TestOrderExecution:
 
 class TestPositionManagement:
     @pytest.mark.asyncio
+    async def test_profit_taking(self, trading_bot):
+        """Test automated profit taking logic."""
+        # Open position
+        await trading_bot.execute_order('buy', 2.0, 50000.0, 'BTC-USD')
+        
+        # Simulate price increase to trigger profit taking
+        await trading_bot.update_market_price('BTC-USD', 52500.0)  # 5% profit
+        await trading_bot.check_positions()
+        
+        position = await trading_bot.get_position('BTC-USD')
+        # Should have taken 30% of position at 5% profit
+        assert position['size'] == pytest.approx(2.0 * 0.7, rel=0.1)
+
+    @pytest.mark.asyncio
+    async def test_position_rebalancing(self, trading_bot):
+        """Test volatility-based position rebalancing."""
+        # Open position
+        await trading_bot.execute_order('buy', 2.0, 50000.0, 'BTC-USD')
+        
+        # Simulate high volatility (price drop to 45000 - 10% change)
+        await trading_bot.update_market_price('BTC-USD', 45000.0)
+        await trading_bot.check_positions()
+        
+        position = await trading_bot.get_position('BTC-USD')
+        # Should have reduced position by 20%
+        assert position['size'] == pytest.approx(2.0 * 0.8, rel=0.1)
+    @pytest.mark.asyncio
     async def test_position_tracking(self, trading_bot):
         """Test position tracking through multiple trades."""
         trading_pair = 'BTC-USD'
@@ -136,12 +163,35 @@ class TestRiskManagement:
 class TestSystemHealth:
     @pytest.mark.asyncio
     async def test_health_monitoring(self, trading_bot):
-        """Test system health monitoring."""
+        """Test comprehensive health monitoring system."""
+        # Initial health check
+        health = await trading_bot.check_health()
         assert trading_bot.is_healthy is True
+        assert health is True  # Basic check mode
+
+        # Test detailed health metrics
+        trading_bot.config['detailed_health_check'] = True
+        detailed_health = await trading_bot.check_health()
+        assert isinstance(detailed_health, dict)
+        assert detailed_health['status'] == 'healthy'
+        assert detailed_health['api_status'] == 'unknown'  # No API checks yet
         
-        # Simulate API error
+        # Simulate API connectivity failure
         trading_bot.api_client.get_server_time = AsyncMock(side_effect=Exception("API Error"))
-        health_status = await trading_bot.check_health()
-        
-        assert health_status is False
-        assert trading_bot.is_healthy is False
+        detailed_health = await trading_bot.check_health()
+        assert detailed_health['api_status'] == 'disconnected'
+        assert detailed_health['status'] == 'degraded'
+
+        # Test position health warnings
+        await trading_bot.execute_order('buy', 5.0, 50000.0, 'BTC-USD')
+        await trading_bot.update_market_price('BTC-USD', 45000.0)  # Create large loss
+        detailed_health = await trading_bot.check_health()
+        assert detailed_health['position_status'] == 'warning'
+        assert detailed_health['risk_status'] == 'critical'
+        assert detailed_health['status'] == 'unhealthy'
+
+        # Test metrics collection
+        metrics = detailed_health['metrics']
+        assert metrics['position_count'] == 1
+        assert metrics['daily_pnl'] > 0  # Should reflect loss from position
+        assert metrics['max_drawdown'] > 0.0

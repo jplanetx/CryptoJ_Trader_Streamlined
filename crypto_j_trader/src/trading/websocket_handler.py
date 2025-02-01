@@ -1,199 +1,197 @@
-"""WebSocket handler for market data streaming"""
+"""WebSocket handler for real-time market data."""
+import asyncio
 import logging
 import json
-import asyncio
-from datetime import datetime, timedelta
-from typing import Dict, Any, Optional, Callable, Coroutine, Union, List
 import websockets
-from websockets.exceptions import WebSocketException
+from typing import Dict, Any, Optional, Callable, List
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
 class WebSocketHandler:
-    """Handles WebSocket connections for market data"""
-    
     def __init__(self, config: Dict[str, Any]):
-        ws_config = config.get('websocket', {})
-        self.url = ws_config.get('url', 'wss://ws-feed.pro.coinbase.com')
-        self.trading_pairs = ws_config.get('subscriptions', [])
-        self.ping_interval = ws_config.get('ping_interval', 30)
-        self.reconnect_delay = ws_config.get('reconnect_delay', 5)
-        self.max_connection_attempts = ws_config.get('max_connection_attempts', 5)
-        self.health_check_interval = ws_config.get('health_check_interval', 60)
-        self.callbacks: List[Callable[[Dict[str, Any]], Coroutine[Any, Any, None]]] = []
-        self.running = False
-        self.ws = None
-        self.last_message_time = datetime.now()
-        self._is_connected = False
-        self.connection_attempts = 0
-        self._subscribed_channels = set()
-        self._health_check_task = None
-        self._message_handler_task = None
+        """Initialize WebSocket handler with configuration."""
+        self.config = config['websocket']
+        self.url = self.config['url']
+        self.ping_interval = self.config.get('ping_interval', 30)
+        self.reconnect_delay = self.config.get('reconnect_delay', 5)
+        self.subscription_retry_delay = self.config.get('subscription_retry_delay', 5)
+        self.heartbeat_timeout = self.config.get('heartbeat_timeout', 60)  # Time in seconds
         
+        self._ws = None
+        self._is_connected = False
+        self.running = False
+        self.subscriptions = set()
+        self.last_message_time = datetime.now(timezone.utc)
+        self.connection_attempts = 0
+        self.message_handlers = []
+        self._message_task = None
+
     @property
     def is_connected(self) -> bool:
-        """Property to access connection status."""
-        return self._is_connected and self.ws is not None and not self.ws.closed
-
-    @property
-    def is_healthy(self) -> bool:
-        """Check if the connection is healthy based on last message time."""
-        return (datetime.now() - self.last_message_time) < timedelta(seconds=self.health_check_interval)
-
-    async def _health_check(self) -> None:
-        """Periodic health check to monitor connection status."""
-        while self.running:
-            try:
-                if self.is_connected and not self.is_healthy:
-                    logger.warning("Health check failed - reconnecting...")
-                    await self._reconnect()
-                await asyncio.sleep(self.health_check_interval)
-            except Exception as e:
-                logger.error(f"Health check error: {e}")
-                await asyncio.sleep(1)
-
-    async def connect(self) -> bool:
-        """Establish WebSocket connection with explicit retry mechanism."""
-        self.connection_attempts += 1
-        logger.info(f"WebSocket connection attempt {self.connection_attempts}")
-        
-        try:
-            if self.ws:
-                await self.ws.close()
-            
-            self.ws = await websockets.connect(self.url)
-            self._is_connected = True
-            self.last_message_time = datetime.now()
-            
-            # Subscribe to channels
-            if self._subscribed_channels:
-                subscription_message = {
-                    "type": "subscribe",
-                    "channels": list(self._subscribed_channels)
-                }
-                await self.ws.send(json.dumps(subscription_message))
-            
-            logger.info(f"WebSocket connection successful on attempt {self.connection_attempts}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"WebSocket connection error on attempt {self.connection_attempts}: {e}")
-            self._is_connected = False
-            
-            if self.connection_attempts < self.max_connection_attempts:
-                await asyncio.sleep(self.reconnect_delay)
-                return await self.connect()
-            
-            return False
-
-    async def _reconnect(self) -> None:
-        """Handle reconnection logic."""
-        self._is_connected = False
-        self.connection_attempts = 0
-        
-        while self.running and not self.is_connected:
-            try:
-                success = await self.connect()
-                if success:
-                    break
-                logger.error("Failed to reconnect")
-                await asyncio.sleep(self.reconnect_delay)
-            except Exception as e:
-                logger.error(f"Reconnection error: {e}")
-                await asyncio.sleep(self.reconnect_delay)
-
-    async def _handle_messages(self) -> None:
-        """Handle incoming WebSocket messages."""
-        while self.running:
-            try:
-                if not self.is_connected:
-                    await asyncio.sleep(0.1)
-                    continue
-                    
-                message = await self.ws.recv()
-                self.last_message_time = datetime.now()
-                
-                try:
-                    parsed_message = json.loads(message)
-                    await self.on_message(parsed_message)
-                    
-                    # Process callbacks
-                    for callback in self.callbacks:
-                        try:
-                            await callback(parsed_message)
-                        except Exception as e:
-                            logger.error(f"Callback error: {e}")
-                            
-                except json.JSONDecodeError as e:
-                    logger.error(f"Failed to parse message: {e}")
-                    
-            except websockets.exceptions.ConnectionClosed:
-                logger.warning("WebSocket connection closed")
-                await self._reconnect()
-                
-            except Exception as e:
-                logger.error(f"Message handling error: {e}")
-                await asyncio.sleep(0.1)
+        """Get connection status."""
+        return self._is_connected
 
     async def start(self) -> None:
-        """Start WebSocket handler with connection management"""
-        logger.info("Starting WebSocket handler")
+        """Start the WebSocket handler."""
         self.running = True
-        self.connection_attempts = 0
-        
-        # Start health check task
-        self._health_check_task = asyncio.create_task(self._health_check())
-        
-        # Start message handler task
-        self._message_handler_task = asyncio.create_task(self._handle_messages())
-        
-        while self.running and self.connection_attempts < self.max_connection_attempts:
+        while self.running:
             try:
-                success = await self.connect()
-                if success:
-                    break
-                logger.error("Failed to establish WebSocket connection")
-            except Exception as e:
-                logger.error(f"Error starting WebSocket handler: {e}")
-                self._is_connected = False
-                if self.connection_attempts < self.max_connection_attempts:
-                    await asyncio.sleep(self.reconnect_delay)
+                await self.connect()
+                # Auto-subscribe to configured channels
+                for channel in self.config.get('subscriptions', []):
+                    await self._subscribe_with_retry(channel)
 
-    async def on_message(self, message: Dict[str, Any]):
-        """Default message handler."""
-        logger.info(f"Received message: {message}")
-        
-    async def stop(self):
-        """Stop WebSocket connection."""
-        self.running = False
-        self._is_connected = False
-        
-        if self._health_check_task:
-            self._health_check_task.cancel()
-        
-        if self._message_handler_task:
-            self._message_handler_task.cancel()
-            
-        if self.ws:
-            await self.ws.close()
-            
-    def add_callback(self, callback: Callable[[Dict[str, Any]], Coroutine[Any, Any, None]]) -> None:
-        """Add a message callback."""
-        self.callbacks.append(callback)
-        
-    async def subscribe(self, channel: str) -> bool:
-        """Subscribe to a channel."""
-        self._subscribed_channels.add(channel)
-        
-        if self.is_connected:
-            try:
-                subscription_message = {
-                    "type": "subscribe",
-                    "channels": [channel]
-                }
-                await self.ws.send(json.dumps(subscription_message))
+                # Start message loop in a task so we can handle cancellation
+                self._message_task = asyncio.create_task(self._message_loop())
+                try:
+                    await self._message_task
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    logger.error(f"Message loop error: {e}")
+
             except Exception as e:
-                logger.error(f"Subscription error: {e}")
-                return False
+                logger.error(f"WebSocket error: {e}")
+                self._is_connected = False
+                if self.running:
+                    await asyncio.sleep(self.reconnect_delay)
+                    continue
+                break
+
+    async def stop(self) -> None:
+        """Stop the WebSocket handler."""
+        self.running = False
+        if self._message_task and not self._message_task.done():
+            self._message_task.cancel()
+            try:
+                await self._message_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        await self.disconnect()
+
+    async def connect(self) -> bool:
+        """Establish WebSocket connection."""
+        try:
+            if self._ws:
+                await self.disconnect()
+            
+            self._ws = await websockets.connect(self.url)
+            self._is_connected = True
+            self.last_message_time = datetime.now(timezone.utc)
+            logger.info("WebSocket connected successfully")
+            return True
+        except Exception as e:
+            logger.error(f"WebSocket connection failed: {e}")
+            self._is_connected = False
+            return False
+
+    async def disconnect(self) -> None:
+        """Close WebSocket connection."""
+        if self._ws:
+            try:
+                await self._ws.close()
+            except Exception as e:
+                logger.error(f"Error closing WebSocket: {e}")
+            finally:
+                self._ws = None
+                self._is_connected = False
+
+    async def subscribe(self, channel: str) -> None:
+        """Subscribe to a channel."""
+        if not self._is_connected or not self._ws:
+            logger.warning(f"Cannot subscribe to {channel}: not connected")
+            return
+
+        try:
+            subscription_message = {
+                "type": "subscribe",
+                "channel": channel
+            }
+            await self._ws.send(json.dumps(subscription_message))
+            self.subscriptions.add(channel)
+            logger.info(f"Subscribed to channel: {channel}")
+        except Exception as e:
+            logger.error(f"Subscription error for {channel}: {e}")
+
+    async def _subscribe_with_retry(self, channel: str) -> None:
+        """Subscribe to a channel with retry logic."""
+        max_attempts = 3
+        attempt = 0
+        while attempt < max_attempts and self.running and self._is_connected:
+            attempt += 1
+            try:
+                await self.subscribe(channel)
+                if channel in self.subscriptions:
+                    return
+                else:
+                   raise Exception(f"Failed to subscribe to {channel}")
+            except Exception as e:
+                logger.error(f"Subscription attempt {attempt} failed for {channel}: {e}")
+                if attempt < max_attempts:
+                    await asyncio.sleep(self.subscription_retry_delay)
+
+    async def unsubscribe(self, channel: str) -> None:
+        """Unsubscribe from a channel."""
+        if not self._is_connected or not self._ws:
+            return
+
+        try:
+            unsubscribe_message = {
+                "type": "unsubscribe",
+                "channel": channel
+            }
+            await self._ws.send(json.dumps(unsubscribe_message))
+            self.subscriptions.remove(channel)
+            logger.info(f"Unsubscribed from channel: {channel}")
+        except Exception as e:
+            logger.error(f"Unsubscription error for {channel}: {e}")
+
+    async def _message_loop(self) -> None:
+        """Main message processing loop."""
+        while self._is_connected and self.running and self._ws:
+            try:
+                message = await self._ws.recv()
+                self.last_message_time = datetime.now(timezone.utc)
                 
-        return True
+                # Parse message
+                if isinstance(message, str):
+                    message = json.loads(message)
+                
+                # Process message
+                await self.on_message(message)
+                if (datetime.now(timezone.utc) - self.last_message_time).total_seconds() > self.heartbeat_timeout:
+                  logger.warning("No heartbeat received, closing connection")
+                  self._is_connected = False
+                  break
+                
+            except websockets.ConnectionClosed:
+                logger.warning("WebSocket connection closed")
+                self._is_connected = False
+                break
+            except asyncio.CancelledError:
+                logger.info("Message loop cancelled")
+                raise
+            except Exception as e:
+                logger.error(f"Error processing message: {e}")
+                # Don't continue on error if we're not running or connected
+                if not (self.running and self._is_connected):
+                    break
+                continue
+
+    async def on_message(self, message: Dict[str, Any]) -> None:
+        """Process received message."""
+        if not self.running:
+            return
+
+        try:
+            # Call all registered message handlers
+            for handler in self.message_handlers:
+                await handler(message)
+        except Exception as e:
+            logger.error(f"Error in message handler: {e}")
+
+    def add_message_handler(self, handler: Callable) -> None:
+        """Add a message handler function."""
+        if handler not in self.message_handlers:
+            self.message_handlers.append(handler)

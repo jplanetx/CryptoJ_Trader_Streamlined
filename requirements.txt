@@ -2,3 +2,5 @@ coinbase-advanced-py>=1.8.2
 requests>=2.32.3
 cryptography>=44.0.0
 PyJWT>=2.10.1
+psutil>=5.9.8
+numpy>=1.26.4

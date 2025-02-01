@@ -1,197 +1,180 @@
-import logging
-from typing import Dict, Optional, List
-from datetime import datetime, timedelta
-import numpy as np
+"""
+risk_management.py
 
+This module handles risk evaluations and enforces risk control measures
+for order execution during live or paper trading.
+"""
+
+import logging
+from typing import Dict, Any, Optional
+from datetime import datetime, timezone
+from .market_data import MarketDataHandler
+
+# Configure module logger
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+handler = logging.StreamHandler()
+handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+logger.addHandler(handler)
 
 class RiskManager:
-    """Manages risk controls and position sizing"""
-    
-    def __init__(self, config: Dict):
-        self.config = config['risk_management']
-        self.daily_loss_limit = self.config.get('daily_loss_limit', 0.02)  # 2% default
-        self.position_size_limit = self.config.get('position_size_limit', 0.1)  # 10% default
-        self.stop_loss_pct = self.config.get('stop_loss_pct', 0.05)  # 5% default
-        self.correlation_weight = self.config.get('correlation_weight', 0.3)  # 30% weight for correlation
-        self.volatility_weight = self.config.get('volatility_weight', 0.4)  # 40% weight for volatility
-        self.min_position_size = self.config.get('min_position_size', 0.02)  # 2% minimum position size
-        self.max_positions = self.config.get('max_positions', 5)  # Maximum number of concurrent positions
-        self.max_exposure = self.config.get('max_exposure', 0.5)  # 50% maximum total exposure
+    def __init__(self, risk_threshold: float, market_data: MarketDataHandler):
+        """
+        Initialize the RiskManager with specified risk threshold and market data handler.
         
-        self.daily_loss = 0.0
-        self.last_reset = datetime.now()
-        self.active_positions: Dict[str, float] = {}  # symbol -> position size
-        self.emergency_mode = False
+        Args:
+            risk_threshold: Maximum allowable risk exposure
+            market_data: Instance of MarketDataHandler for market data access
+        """
+        self.risk_threshold = risk_threshold
+        self.market_data = market_data
+        self.max_position_size: Dict[str, float] = {}
+        self.max_order_value: float = 1000.0  # Default max order value for paper trading
+        self.market_data_max_age = 5.0  # Maximum age of market data in seconds
+        self.min_order_book_depth = 10  # Minimum required order book depth
+        self.emergency_mode = False  # Emergency mode flag
         
-    def reset_daily_loss(self) -> None:
-        """Reset daily loss tracking at market open"""
-        if datetime.now() - self.last_reset > timedelta(hours=24):
-            self.daily_loss = 0.0
-            self.last_reset = datetime.now()
-            logger.info("Daily loss tracking reset")
+    def validate_paper_trading(self, trading_pair: str) -> tuple[bool, str]:
+        """
+        Validate if system is ready for paper trading.
+        
+        Args:
+            trading_pair: Trading pair to validate
             
-    def check_daily_loss_limit(self, portfolio_value: float) -> bool:
-        """Check if daily loss limit has been exceeded"""
-        self.reset_daily_loss()
-        if self.daily_loss <= -abs(self.daily_loss_limit * portfolio_value):
-            logger.warning(f"Daily loss limit reached: {-self.daily_loss:.2f}")
-            return False
-        return True
+        Returns:
+            tuple[bool, str]: (is_ready, reason)
+        """
+        # Check if market data is running and fresh
+        if not self.market_data.is_running:
+            return False, "Market data handler not running"
+            
+        if not self.market_data.is_data_fresh(self.market_data_max_age):
+            return False, "Market data not fresh"
+            
+        # Verify market data completeness
+        snapshot = self.market_data.get_market_snapshot(trading_pair)
+        if not snapshot['last_price']:
+            return False, "No recent price data available"
+            
+        if snapshot['order_book_depth'] < self.min_order_book_depth:
+            return False, "Insufficient order book depth"
+            
+        if not snapshot['subscribed']:
+            return False, "Not subscribed to trading pair"
+            
+        return True, "Ready for paper trading"
 
-    def validate_new_position(self, symbol: str, size: float, portfolio_value: float) -> bool:
-        """Validate if a new position can be opened based on risk limits
+    def assess_risk(self, position_value: float, trading_pair: str) -> bool:
+        """
+        Assess the current risk and determine if trading can proceed.
         
         Args:
-            symbol: Trading symbol
-            size: Position size in base currency
-            portfolio_value: Current portfolio value
+            position_value: Current position value
+            trading_pair: Trading pair being traded
+            
         Returns:
-            bool: True if position is valid, False otherwise
+            bool: True if risk is acceptable, False otherwise
         """
-        # Check emergency mode
-        if self.emergency_mode:
-            logger.warning("Cannot open new position: Emergency mode active")
+        try:
+            # Check market data consistency
+            is_ready, reason = self.validate_paper_trading(trading_pair)
+            if not is_ready:
+                logger.error("Market data validation failed: %s", reason)
+                return False
+                
+            # Calculate market volatility from recent trades
+            recent_trades = self.market_data.get_recent_trades(trading_pair)
+            if not recent_trades:
+                logger.error("No recent trades available for volatility calculation")
+                return False
+                
+            # Enhanced volatility calculation using standard deviation
+            prices = [trade['price'] for trade in recent_trades]
+            avg_price = sum(prices) / len(prices)
+            squared_diffs = [(p - avg_price) ** 2 for p in prices]
+            std_dev = (sum(squared_diffs) / len(prices)) ** 0.5
+            volatility = std_dev / avg_price
+            
+            # Calculate risk exposure with position scaling factor
+            position_scale = 1.0 + (position_value / 10000.0)  # Scale factor increases with position size
+            risk_exposure = position_value * volatility * position_scale
+            
+            if risk_exposure >= self.risk_threshold:  # Changed from > to >= for strict comparison
+                logger.warning("Risk exposure (%.2f) exceeds threshold (%.2f)", 
+                           risk_exposure, self.risk_threshold)
+                return False
+                
+            logger.info("Risk assessment passed: exposure %.2f within threshold %.2f",
+                       risk_exposure, self.risk_threshold)
+            return True
+            
+        except Exception as e:
+            logger.exception("Error during risk assessment: %s", str(e))
             return False
             
-        # Check position count limit
-        if len(self.active_positions) >= self.max_positions and symbol not in self.active_positions:
-            logger.warning(f"Maximum position count ({self.max_positions}) reached")
-            return False
-            
-        # Calculate total exposure including new position
-        total_exposure = sum(self.active_positions.values())
-        if symbol in self.active_positions:
-            total_exposure -= self.active_positions[symbol]
-        total_exposure += size
-        
-        # Check exposure limit
-        if total_exposure > portfolio_value * self.max_exposure:
-            logger.warning(f"Maximum exposure limit ({self.max_exposure*100}%) exceeded")
-            return False
-            
-        # Check individual position size limit
-        if size > portfolio_value * self.position_size_limit:
-            logger.warning(f"Position size limit ({self.position_size_limit*100}%) exceeded")
-            return False
-            
-        return True
-        
-    def update_position(self, symbol: str, size: float) -> None:
-        """Update tracked position size for a symbol"""
-        if size == 0:
-            self.active_positions.pop(symbol, None)
-        else:
-            self.active_positions[symbol] = size
-            
-    def get_total_exposure(self) -> float:
-        """Get total exposure across all positions"""
-        return sum(self.active_positions.values())
-        
-    def set_emergency_mode(self, enabled: bool) -> None:
-        """Enable or disable emergency mode"""
-        self.emergency_mode = enabled
-        if enabled:
-            logger.warning("Emergency mode activated - new positions blocked")
-        else:
-            logger.info("Emergency mode deactivated")
-        
-    def calculate_position_size(self, portfolio_value: float, volatility: float,
-                              correlation_matrix: Optional[np.ndarray] = None) -> float:
-        """Calculate position size based on volatility, correlation risk, and overall risk limits
+    def validate_order(self, trading_pair: str, order_size: float, 
+                      order_price: float) -> tuple[bool, str]:
+        """
+        Validate if an order meets risk control requirements.
         
         Args:
-            portfolio_value: Current portfolio value
-            volatility: Current market volatility
-            correlation_matrix: Optional correlation matrix of portfolio assets
+            trading_pair: Trading pair for the order
+            order_size: Size of the order
+            order_price: Price of the order
+            
         Returns:
-            float: Recommended position size in base currency
+            tuple[bool, str]: (is_valid, reason)
         """
-        if self.emergency_mode:
-            return 0.0
+        try:
+            # Check if order value exceeds maximum
+            order_value = order_size * order_price
+            if order_value > self.max_order_value:
+                return False, f"Order value {order_value} exceeds maximum {self.max_order_value}"
+                
+            # Verify order book depth can support the order
+            order_book = self.market_data.get_order_book(trading_pair)
+            if not order_book:
+                return False, "Order book not available"
+                
+            # Check if there's enough liquidity
+            total_liquidity = sum(float(size) for size in order_book['bids'].values())
+            if order_size > total_liquidity * 0.1:  # Don't use more than 10% of available liquidity
+                return False, "Order size exceeds safe liquidity threshold"
+                
+            return True, "Order validated"
             
-        # Base Kelly position sizing
-        win_prob = 0.55  # Default win probability
-        win_loss_ratio = 1.5  # Default win/loss ratio
-        kelly_fraction = (win_prob - (1 - win_prob)/win_loss_ratio)
-        
-        # Volatility adjustment
-        volatility_score = min(1.0, 0.1/volatility) if volatility > 0 else 1.0
-        
-        # Correlation risk adjustment
-        correlation_score = 1.0
-        if correlation_matrix is not None:
-            avg_correlation = self.calculate_correlation_risk(correlation_matrix)
-            # Reduce position size as correlation increases
-            correlation_score = 1.0 - abs(avg_correlation)
-        
-        # Calculate final position size with weighted factors
-        risk_adjusted_size = (
-            kelly_fraction *
-            (volatility_score * self.volatility_weight +
-             correlation_score * self.correlation_weight)
-        )
-        
-        # Apply limits
-        position_size = max(
-            min(risk_adjusted_size, self.position_size_limit),
-            self.min_position_size
-        )
-        
-        # Check total exposure limit
-        remaining_exposure = (self.max_exposure * portfolio_value) - self.get_total_exposure()
-        position_size = min(position_size * portfolio_value, remaining_exposure)
-        
-        return position_size
-        
-    def calculate_atr(self, high_prices: np.ndarray, low_prices: np.ndarray, close_prices: np.ndarray, period: int = 14) -> float:
-        """Calculate Average True Range for dynamic stop loss"""
-        high_low = high_prices - low_prices
-        high_close = np.abs(high_prices - np.roll(close_prices, 1))
-        low_close = np.abs(low_prices - np.roll(close_prices, 1))
-        
-        ranges = np.vstack([high_low, high_close, low_close])
-        true_range = np.max(ranges, axis=0)
-        
-        return np.mean(true_range[-period:])
-    
-    def calculate_correlation_risk(self, returns_matrix: np.ndarray) -> float:
-        """Calculate portfolio correlation risk score
+        except Exception as e:
+            logger.exception("Error validating order: %s", str(e))
+            return False, f"Order validation error: {str(e)}"
+            
+    def update_threshold(self, new_threshold: float) -> None:
+        """
+        Update the risk threshold.
         
         Args:
-            returns_matrix: Matrix of asset returns (rows=time, cols=assets)
-        Returns:
-            float: Risk score based on average correlation
+            new_threshold: New risk threshold value
         """
-        correlation_matrix = np.corrcoef(returns_matrix.T)
-        # Average correlation excluding self-correlation
-        np.fill_diagonal(correlation_matrix, np.nan)
-        avg_correlation = np.nanmean(correlation_matrix)
-        return avg_correlation
+        logger.info("Updating risk threshold from %.2f to %.2f", 
+                   self.risk_threshold, new_threshold)
+        self.risk_threshold = new_threshold
         
-    def calculate_stop_loss(self, entry_price: float,
-                          high_prices: Optional[np.ndarray] = None,
-                          low_prices: Optional[np.ndarray] = None,
-                          close_prices: Optional[np.ndarray] = None) -> float:
-        """Calculate dynamic stop loss based on market volatility
+    def set_position_limit(self, trading_pair: str, max_size: float) -> None:
+        """
+        Set maximum position size for a trading pair.
         
         Args:
-            entry_price: Entry price of the position
-            high_prices: Recent high prices for ATR calculation
-            low_prices: Recent low prices for ATR calculation  
-            close_prices: Recent close prices for ATR calculation
+            trading_pair: Trading pair to set limit for
+            max_size: Maximum position size allowed
         """
-        if high_prices is not None and low_prices is not None and close_prices is not None:
-            # Calculate ATR-based stop loss
-            atr = self.calculate_atr(high_prices, low_prices, close_prices)
-            # Use 2x ATR for stop loss distance
-            stop_distance = 2 * atr
-            return entry_price * (1 - stop_distance)
-        else:
-            # Fallback to fixed percentage if price data not available
-            return entry_price * (1 - self.stop_loss_pct)
+        self.max_position_size[trading_pair] = max_size
+        logger.info("Set position limit for %s: %.2f", trading_pair, max_size)
         
-    def update_daily_loss(self, pnl: float) -> None:
-        """Update daily loss tracking"""
-        self.daily_loss += pnl
-        logger.debug(f"Updated daily loss: {self.daily_loss:.2f}")
+    def set_emergency_mode(self, mode: bool) -> None:
+        """
+        Set the emergency mode.
+        
+        Args:
+            mode: True to enable emergency mode, False to disable
+        """
+        self.emergency_mode = mode
+        logger.info("Emergency mode set to %s", mode)
