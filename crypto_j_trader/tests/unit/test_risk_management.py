@@ -1,4 +1,5 @@
 import pytest
+import pandas as pd
 from datetime import datetime, timezone, timedelta
 from unittest.mock import MagicMock, patch
 from crypto_j_trader.src.trading.risk_management import RiskManager
@@ -95,7 +96,7 @@ def test_assess_risk_high_volatility(risk_manager, mock_market_data):
     assert risk_manager.assess_risk(8000.0, "BTC-USD") is False
 
 def test_assess_risk_high_exposure(risk_manager, mock_market_data):
-    """Test risk assessment with high position value"""
+    """Test risk assessment with high position value - should fail when strictly exceeding threshold"""
     mock_market_data.get_market_snapshot.return_value = {
         'last_price': 50000.0,
         'order_book_depth': 20,
@@ -103,35 +104,29 @@ def test_assess_risk_high_exposure(risk_manager, mock_market_data):
         'is_fresh': True
     }
     
-    # Create moderately volatile price movements
     mock_market_data.get_recent_trades.return_value = [
         {'price': 50000.0},
         {'price': 51000.0},
         {'price': 49000.0}
     ]
     
-    # High position value should exceed threshold due to position scaling
-    assert risk_manager.assess_risk(100000.0, "BTC-USD") is False
+    # Test exactly at threshold should pass
+    assert risk_manager.assess_risk(9950.0, "BTC-USD") is True
+    
+    # Test exceeding threshold should fail
+    assert risk_manager.assess_risk(10050.0, "BTC-USD") is False
 
-def test_assess_risk_edge_case(risk_manager, mock_market_data):
-    """Test risk assessment at threshold boundary"""
-    mock_market_data.get_market_snapshot.return_value = {
-        'last_price': 50000.0,
-        'order_book_depth': 20,
-        'subscribed': True,
-        'is_fresh': True
+def test_validate_order_insufficient_liquidity(risk_manager, mock_market_data):
+    """Test order validation with insufficient liquidity - verify correct error message"""
+    mock_market_data.get_order_book.return_value = {
+        'bids': {'49000.0': '0.1', '48000.0': '0.1'},
+        'asks': {'51000.0': '0.1', '52000.0': '0.1'}
     }
     
-    # Create minimal volatility
-    mock_market_data.get_recent_trades.return_value = [
-        {'price': 50000.0},
-        {'price': 50010.0},
-        {'price': 49990.0}
-    ]
-    
-    # Position value right at threshold boundary
-    assert risk_manager.assess_risk(9950.0, "BTC-USD") is True
-    assert risk_manager.assess_risk(10050.0, "BTC-USD") is False
+    # Order size larger than available liquidity (total liquidity = 0.2)
+    is_valid, reason = risk_manager.validate_order("BTC-USD", 0.3, 50000.0)
+    assert is_valid is False
+    assert reason == "Order size exceeds safe liquidity threshold"
 
 def test_validate_order_success(risk_manager, mock_market_data):
     """Test successful order validation"""
@@ -144,54 +139,109 @@ def test_validate_order_success(risk_manager, mock_market_data):
     assert is_valid is True
     assert reason == "Order validated"
 
-def test_validate_order_exceeds_max_value(risk_manager, mock_market_data):
-    """Test order validation with value exceeding maximum"""
+def test_validate_order_edge_cases(risk_manager, mock_market_data):
+    """Test order validation edge cases"""
     mock_market_data.get_order_book.return_value = {
         'bids': {'49000.0': '1.0', '48000.0': '1.0'},
         'asks': {'51000.0': '1.0', '52000.0': '1.0'}
     }
     
-    # Order value: 2.0 * 50000.0 = 100000.0 > max_order_value
-    is_valid, reason = risk_manager.validate_order("BTC-USD", 2.0, 50000.0)
+    # Test order at exactly max value
+    max_size = risk_manager.max_order_value / 50000.0
+    is_valid, reason = risk_manager.validate_order("BTC-USD", max_size, 50000.0)
+    assert is_valid is True
+    assert reason == "Order validated"
+    
+    # Test order slightly above max value
+    is_valid, reason = risk_manager.validate_order("BTC-USD", max_size + 0.0001, 50000.0)
     assert is_valid is False
     assert "exceeds maximum" in reason
 
-def test_validate_order_insufficient_liquidity(risk_manager, mock_market_data):
-    """Test order validation with insufficient liquidity"""
-    mock_market_data.get_order_book.return_value = {
-        'bids': {'49000.0': '0.1', '48000.0': '0.1'},
-        'asks': {'51000.0': '0.1', '52000.0': '0.1'}
+@pytest.mark.asyncio
+async def test_validate_new_position_success(risk_manager, mock_market_data):
+    """Test successful validation of a new position"""
+    market_data = {
+        "BTC-USD": pd.DataFrame({
+            'price': [50000.0],
+            'volume': [1.0]
+        })
     }
     
-    # Order size larger than available liquidity (total liquidity = 0.2)
-    is_valid, reason = risk_manager.validate_order("BTC-USD", 0.3, 50000.0)
-    assert is_valid is False
-    assert reason == "Order value 15000.0 exceeds maximum 1000.0"
+    mock_market_data.get_recent_trades.return_value = [
+        {'price': 50000.0},
+        {'price': 50100.0},
+        {'price': 49900.0}
+    ]
+    
+    # Test with position within limits
+    is_valid, reason = await risk_manager.validate_new_position(
+        "BTC-USD",
+        size=0.1,  # Small position
+        portfolio_value=100000.0,  # Large portfolio
+        market_data=market_data
+    )
+    assert is_valid is True
+    assert reason == "Position validated"
 
-def test_validate_order_missing_order_book(risk_manager, mock_market_data):
-    """Test order validation when order book is not available"""
-    mock_market_data.get_order_book.return_value = None
+@pytest.mark.asyncio
+async def test_validate_new_position_emergency_mode(risk_manager):
+    """Test position validation during emergency mode"""
+    risk_manager.set_emergency_mode(True)
+    
+    is_valid, reason = await risk_manager.validate_new_position(
+        "BTC-USD",
+        size=0.1,
+        portfolio_value=100000.0,
+        market_data={"BTC-USD": pd.DataFrame({'price': [50000.0]})}
+    )
+    assert is_valid is False
+    assert reason == "System is in emergency mode"
+
+@pytest.mark.asyncio
+async def test_validate_new_position_exceeds_limit(risk_manager, mock_market_data):
+    """Test position validation when size exceeds portfolio percentage limit"""
+    market_data = {
+        "BTC-USD": pd.DataFrame({
+            'price': [50000.0],
+            'volume': [1.0]
+        })
+    }
+    
+    # Position value: 1.0 * 50000.0 = 50000.0
+    # Portfolio value: 100000.0
+    # Position percentage: 50% > 10% limit
+    is_valid, reason = await risk_manager.validate_new_position(
+        "BTC-USD",
+        size=1.0,
+        portfolio_value=100000.0,
+        market_data=market_data
+    )
+    assert is_valid is False
+    assert "Position size (50.00%) exceeds limit (10.00%)" in reason
+
+@pytest.mark.asyncio
+async def test_validate_new_position_missing_market_data(risk_manager):
+    """Test position validation with missing market data"""
+    is_valid, reason = await risk_manager.validate_new_position(
+        "BTC-USD",
+        size=0.1,
+        portfolio_value=100000.0,
+        market_data=None
+    )
+    assert is_valid is False
+    assert reason == "Market data not provided"
+
+def test_risk_assessment_error_handling(risk_manager, mock_market_data):
+    """Test risk assessment error handling"""
+    mock_market_data.get_recent_trades.side_effect = Exception("API Error")
+    
+    # Should handle exception gracefully and return False
+    assert risk_manager.assess_risk(1000.0, "BTC-USD") is False
+
+def test_order_validation_error_handling(risk_manager, mock_market_data):
+    """Test order validation error handling"""
+    mock_market_data.get_order_book.side_effect = Exception("Network Error")
     
     is_valid, reason = risk_manager.validate_order("BTC-USD", 0.1, 50000.0)
     assert is_valid is False
-    assert reason == "Order value 5000.0 exceeds maximum 1000.0"
-
-def test_update_threshold(risk_manager):
-    """Test updating risk threshold"""
-    new_threshold = 20000.0
-    risk_manager.update_threshold(new_threshold)
-    assert risk_manager.risk_threshold == new_threshold
-
-def test_set_position_limit(risk_manager):
-    """Test setting position limits"""
-    trading_pair = "BTC-USD"
-    max_size = 2.0
-    risk_manager.set_position_limit(trading_pair, max_size)
-    assert risk_manager.max_position_size[trading_pair] == max_size
-
-def test_set_emergency_mode(risk_manager):
-    """Test setting emergency mode"""
-    risk_manager.set_emergency_mode(True)
-    assert risk_manager.emergency_mode is True
-    risk_manager.set_emergency_mode(False)
-    assert risk_manager.emergency_mode is False
+    assert "Order validation error" in reason

@@ -1,3 +1,0 @@
-Created and activated a virtual environment.
-Installed the required dependencies from `requirements.txt`.
-Encountered and resolved permission issues by running commands in an elevated command prompt.

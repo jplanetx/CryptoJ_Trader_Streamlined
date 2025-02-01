@@ -1,65 +1,43 @@
 @echo off
-setlocal enabledelayedexpansion
-
-:: Test Runner for CryptoJ Trader
-set PYTHONPATH=%~dp0
-set PYTEST_ADDOPTS=--no-cov-on-fail
+SETLOCAL EnableDelayedExpansion
 
 :: Parse command line arguments
-set FOCUS=
-set COVERAGE_TARGET=80.0
-set PARALLEL=
+SET TestType=all
+SET TestPath=
+SET Coverage=false
+SET Verbose=false
 
 :parse_args
-if "%~1"=="" goto :main
-if /i "%~1"=="--emergency" (
-    set FOCUS=emergency
-    shift
-    goto :parse_args
-)
-if /i "%~1"=="--integration" (
-    set FOCUS=integration
-    shift
-    goto :parse_args
-)
-if /i "%~1"=="--performance" (
-    set FOCUS=performance
-    shift
-    goto :parse_args
-)
-if /i "%~1"=="--coverage" (
-    set COVERAGE_TARGET=%~2
-    shift
-    shift
-    goto :parse_args
-)
-if /i "%~1"=="--parallel" (
-    set PARALLEL=--parallel
-    shift
-    goto :parse_args
-)
-shift
-goto :parse_args
+IF "%~1"=="" GOTO end_parse
+IF /I "%~1"=="--type" SET TestType=%~2& SHIFT
+IF /I "%~1"=="--path" SET TestPath=%~2& SHIFT
+IF /I "%~1"=="--coverage" SET Coverage=true
+IF /I "%~1"=="--verbose" SET Verbose=true
+SHIFT
+GOTO parse_args
+:end_parse
 
-:main
-echo Running CryptoJ Trader Tests
-echo ===========================
-echo.
+:: Execute PowerShell script with parameters
+SET PS_COMMAND=powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0run_tests.ps1"
 
-:: Run the test suite with pytest directly for emergency tests
-if "%FOCUS%"=="emergency" (
-    pytest -v --tb=short --strict-markers -p no:warnings --cov=crypto_j_trader --cov-report=term-missing --cov-report=xml --cov-report=html -m emergency --run-integration crypto_j_trader/tests/
-) else (
-    pytest -v --tb=short --strict-markers -p no:warnings --cov=crypto_j_trader --cov-report=term-missing --cov-report=xml --cov-report=html crypto_j_trader/tests/
+IF /I "%TestType%"=="unit" SET PS_COMMAND=%PS_COMMAND% -TestType unit
+IF /I "%TestType%"=="integration" SET PS_COMMAND=%PS_COMMAND% -TestType integration
+IF /I "%TestType%"=="specific" (
+    IF NOT "%TestPath%"=="" (
+        SET PS_COMMAND=%PS_COMMAND% -TestType specific -TestPath "%TestPath%"
+    )
 )
+IF "%Coverage%"=="true" SET PS_COMMAND=%PS_COMMAND% -Coverage
+IF "%Verbose%"=="true" SET PS_COMMAND=%PS_COMMAND% -Verbose
 
-:: Check exit code
-if errorlevel 1 (
-    echo.
-    echo Test suite failed with errors
+:: Run the command
+%PS_COMMAND%
+
+:: Check for errors
+IF ERRORLEVEL 1 (
+    echo Test execution failed
     exit /b 1
+) ELSE (
+    echo Test execution completed successfully
+    exit /b 0
 )
-
-echo.
-echo Test suite completed successfully
-exit /b 0

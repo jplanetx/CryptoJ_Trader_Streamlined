@@ -1,1 +1,0 @@
-# This file prevents pytest from collecting archived tests
