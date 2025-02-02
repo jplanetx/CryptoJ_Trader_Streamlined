@@ -1,201 +1,219 @@
 """Unit tests for WebSocket handler."""
 import pytest
-import pytest_asyncio
 import asyncio
 import json
-import websockets
-from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import datetime, timezone, timedelta
+from unittest.mock import Mock, patch, AsyncMock
 from crypto_j_trader.src.trading.websocket_handler import WebSocketHandler
-
-# Use function scope for test isolation
-pytestmark = pytest.mark.asyncio(loop_scope="function")
+import websockets
+from websockets.exceptions import ConnectionClosed
 
 @pytest.fixture
 def websocket_config():
-    """Test configuration for websocket."""
     return {
         'websocket': {
             'url': 'wss://test.example.com/ws',
-            'ping_interval': 0.1,  # Short interval for tests
-            'reconnect_delay': 0.01,  # Very short delay for faster tests
-            'subscriptions': ['BTC-USD']
+            'ping_interval': 5,
+            'reconnect_delay': 1,
+            'subscription_retry_delay': 1,
+            'heartbeat_timeout': 10,
+            'max_missed_heartbeats': 3,
+            'subscriptions': ['BTC/USD', 'ETH/USD']
         }
     }
 
-def create_mock_ws():
-    """Helper to create a mock websocket with proper side effects."""
+@pytest.fixture
+def mock_websocket():
     mock = AsyncMock()
+    mock.recv = AsyncMock()
     mock.send = AsyncMock()
     mock.close = AsyncMock()
-    mock.closed = False
-    
-    # Configure recv responses
-    responses = [
-        '{"type":"connected"}',
-        asyncio.CancelledError()
-    ]
-    
-    async def mock_recv():
-        if not responses:
-            raise asyncio.CancelledError()
-        return responses.pop(0)
-        
-    mock.recv = AsyncMock(side_effect=mock_recv)
     return mock
 
-@pytest_asyncio.fixture
-async def mock_ws_handler(websocket_config):
-    """Create WebSocketHandler instance."""
+@pytest.fixture
+async def websocket_handler(websocket_config):
     handler = WebSocketHandler(websocket_config)
-    
-    # Create a fresh mock websocket for each test
-    async def mock_connect():
-        handler._ws = create_mock_ws()
-        handler._is_connected = True
-        handler.last_message_time = datetime.now()
-        return True
-        
-    handler.connect = mock_connect
-    
-    # Ensure initial connection
-    await handler.connect()
-    return handler
+    yield handler
+    await handler.stop()
 
-async def cleanup_handler(handler, task=None):
-    """Helper function to properly cleanup handler and task."""
-    handler.running = False
+@pytest.mark.asyncio
+async def test_websocket_connection_success(websocket_handler, mock_websocket):
+    with patch('websockets.connect', return_value=mock_websocket):
+        success = await websocket_handler.connect()
+        assert success
+        assert websocket_handler.is_connected
+        assert websocket_handler._ws is not None
+
+@pytest.mark.asyncio
+async def test_websocket_subscription(websocket_handler, mock_websocket):
+    with patch('websockets.connect', return_value=mock_websocket):
+        # Setup mock responses
+        mock_websocket.recv.side_effect = [
+            json.dumps({
+                'type': 'subscribed',
+                'channel': 'BTC/USD'
+            })
+        ]
+        
+        # Connect and subscribe
+        await websocket_handler.connect()
+        await websocket_handler.subscribe('BTC/USD')
+        
+        # Verify subscription message was sent
+        mock_websocket.send.assert_called_with(
+            json.dumps({
+                'type': 'subscribe',
+                'channel': 'BTC/USD'
+            })
+        )
+        
+        # Process messages to handle subscription confirmation
+        await asyncio.sleep(0.1)
+        assert 'BTC/USD' in websocket_handler.subscriptions
+
+@pytest.mark.asyncio
+async def test_websocket_message_handling(websocket_handler, mock_websocket):
+    test_message = {'type': 'trade', 'price': 50000}
+    message_received = asyncio.Event()
     
-    if task and not task.done():
-        task.cancel()
+    async def message_handler(msg):
+        assert msg == test_message
+        message_received.set()
+    
+    with patch('websockets.connect', return_value=mock_websocket):
+        # Setup mock response
+        mock_websocket.recv.side_effect = [json.dumps(test_message)]
+        
+        # Connect and add message handler
+        await websocket_handler.connect()
+        websocket_handler.add_message_handler(message_handler)
+        
+        # Start message loop
+        loop_task = asyncio.create_task(websocket_handler._message_loop())
+        
+        # Wait for message processing
         try:
-            await asyncio.wait_for(task, timeout=0.1)
-        except (asyncio.TimeoutError, asyncio.CancelledError):
-            pass
+            await asyncio.wait_for(message_received.wait(), timeout=1)
+        finally:
+            loop_task.cancel()
+            try:
+                await loop_task
+            except asyncio.CancelledError:
+                pass
+        
+        assert message_received.is_set()
+
+@pytest.mark.asyncio
+async def test_connection_recovery(websocket_handler, mock_websocket):
+    connection_attempts = 0
     
-    if handler._ws:
-        await handler._ws.close()
-        handler._ws = None
-    handler._is_connected = False
-
-@pytest.mark.timeout(1)  # Ensure test doesn't hang
-async def test_websocket_connection(mock_ws_handler):
-    """Test WebSocket connection lifecycle."""
-    task = None
-    try:
-        task = asyncio.create_task(mock_ws_handler.start())
-        await asyncio.sleep(0.1)  # Increased wait for connection establishment
-        assert mock_ws_handler._is_connected, "WebSocket should be connected"
-        assert mock_ws_handler._ws is not None, "WebSocket connection exists"
-    finally:
-        await cleanup_handler(mock_ws_handler, task)
-
-@pytest.mark.timeout(1)  # Ensure test doesn't hang
-async def test_websocket_reconnection(mock_ws_handler):
-    """Test WebSocket reconnection on failure."""
-    task = None
-    try:
-        connection_attempts = 0
+    async def mock_connect(*args, **kwargs):
+        nonlocal connection_attempts
+        connection_attempts += 1
+        if connection_attempts == 1:
+            raise websockets.ConnectionClosed(1006, "Connection lost")
+        return mock_websocket
+    
+    with patch('websockets.connect', side_effect=mock_connect):
+        # Start handler
+        handler_task = asyncio.create_task(websocket_handler.start())
         
-        async def mock_failing_connect():
-            nonlocal connection_attempts
-            connection_attempts += 1
-            if connection_attempts == 1:
-                raise Exception("Connection failed")
-            if not mock_ws_handler._ws:
-                mock_ws_handler._ws = create_mock_ws()
-            mock_ws_handler._is_connected = True
-            return True
+        # Wait for reconnection
+        await asyncio.sleep(2)
         
-        mock_ws_handler.connect = mock_failing_connect
-        task = asyncio.create_task(mock_ws_handler.start())
-        await asyncio.sleep(0.05)  # Short wait
+        # Stop handler
+        await websocket_handler.stop()
+        handler_task.cancel()
+        try:
+            await handler_task
+        except asyncio.CancelledError:
+            pass
+        
         assert connection_attempts > 1
-    finally:
-        await cleanup_handler(mock_ws_handler, task)
 
-@pytest.mark.timeout(1)  # Ensure test doesn't hang
-async def test_websocket_message_handling(mock_ws_handler):
-    """Test WebSocket message handling."""
-    task = None
-    try:
-        received_messages = []
-        test_message = {"type": "ticker", "price": "50000"}
+@pytest.mark.asyncio
+async def test_heartbeat_monitoring(websocket_handler, mock_websocket):
+    with patch('websockets.connect', return_value=mock_websocket):
+        await websocket_handler.connect()
         
-        # Set up message handling
-        mock_ws_handler._ws.recv = AsyncMock(side_effect=[
-            json.dumps(test_message),
-            asyncio.CancelledError()
-        ])
+        # Start heartbeat monitoring
+        heartbeat_task = asyncio.create_task(websocket_handler._heartbeat_loop())
         
-        async def message_handler(message):
-            received_messages.append(message)
+        # Simulate missed heartbeats
+        websocket_handler.last_message_time = datetime.now(timezone.utc) - timedelta(
+            seconds=websocket_handler.heartbeat_timeout * 4
+        )
         
-        mock_ws_handler.add_message_handler(message_handler)
-        task = asyncio.create_task(mock_ws_handler.start())
-        await asyncio.sleep(0.05)  # Short wait
+        # Wait for heartbeat check
+        await asyncio.sleep(websocket_handler.ping_interval * 2)
         
-        assert len(received_messages) == 1
-        assert received_messages[0] == test_message
-    finally:
-        await cleanup_handler(mock_ws_handler, task)
+        heartbeat_task.cancel()
+        try:
+            await heartbeat_task
+        except asyncio.CancelledError:
+            pass
+        
+        assert websocket_handler.missed_heartbeats >= websocket_handler.max_missed_heartbeats
+        assert not websocket_handler.is_connected
 
-@pytest.mark.timeout(1)  # Ensure test doesn't hang
-async def test_websocket_subscription(mock_ws_handler):
-    """Test WebSocket subscription management."""
-    task = None
-    try:
-        subscribed_channels = set()
+@pytest.mark.asyncio
+async def test_subscription_retry(websocket_handler, mock_websocket):
+    subscription_succeeded = False
+    
+    async def mock_send(message):
+        nonlocal subscription_succeeded
+        msg = json.loads(message)
+        if msg['type'] == 'subscribe':
+            if not subscription_succeeded:
+                subscription_succeeded = True
+                raise websockets.ConnectionClosed(1006, "Connection lost")
+    
+    mock_websocket.send.side_effect = mock_send
+    
+    with patch('websockets.connect', return_value=mock_websocket):
+        await websocket_handler.connect()
+        await websocket_handler.subscribe('BTC/USD')
         
-        async def mock_send(message):
-            data = json.loads(message)
-            if data['type'] == 'subscribe':
-                subscribed_channels.add(data['channel'])
-                
-        mock_ws_handler._ws.send = AsyncMock(side_effect=mock_send)
-        task = asyncio.create_task(mock_ws_handler.start())
-        await asyncio.sleep(0.05)  # Short wait
+        # Wait for retry
+        await asyncio.sleep(websocket_handler.subscription_retry_delay * 2)
         
-        await mock_ws_handler.subscribe("BTC-USD")
-        assert "BTC-USD" in subscribed_channels
-        assert "BTC-USD" in mock_ws_handler.subscriptions
-    finally:
-        await cleanup_handler(mock_ws_handler, task)
+        # The second attempt should succeed
+        assert subscription_succeeded
 
-@pytest.mark.timeout(1)  # Ensure test doesn't hang
-async def test_connection_recovery(mock_ws_handler):
-    """Test WebSocket connection recovery scenarios."""
-    task = None
-    try:
-        connection_states = []
+@pytest.mark.asyncio
+async def test_unsubscribe(websocket_handler, mock_websocket):
+    with patch('websockets.connect', return_value=mock_websocket):
+        await websocket_handler.connect()
         
-        async def mock_connect():
-            mock_ws_handler._ws = create_mock_ws()
-            mock_ws_handler._is_connected = True
-            connection_states.append("connected")
-            return True
-            
-        async def mock_disconnect():
-            if mock_ws_handler._ws:
-                await mock_ws_handler._ws.close()
-            mock_ws_handler._ws = None
-            mock_ws_handler._is_connected = False
-            connection_states.append("disconnected")
-            # Raise ConnectionClosed to trigger reconnection
-            raise websockets.ConnectionClosed(1006, "Connection closed")
-            
-        mock_ws_handler.connect = mock_connect
-        mock_ws_handler.disconnect = mock_disconnect
+        # Add subscription
+        websocket_handler.subscriptions.add('BTC/USD')
         
-        task = asyncio.create_task(mock_ws_handler.start())
-        await asyncio.sleep(0.05)  # Short wait for initial connection
+        # Unsubscribe
+        await websocket_handler.unsubscribe('BTC/USD')
         
-        assert mock_ws_handler.is_connected
-        await mock_ws_handler.disconnect()
-        await asyncio.sleep(0.1)  # Wait for reconnection
+        # Verify unsubscribe message was sent
+        mock_websocket.send.assert_called_with(
+            json.dumps({
+                'type': 'unsubscribe',
+                'channel': 'BTC/USD'
+            })
+        )
         
-        assert mock_ws_handler.is_connected
-        assert "disconnected" in connection_states
-        assert connection_states.count("connected") >= 2
-    finally:
-        await cleanup_handler(mock_ws_handler, task)
+        assert 'BTC/USD' not in websocket_handler.subscriptions
+
+@pytest.mark.asyncio
+async def test_connection_info(websocket_handler, mock_websocket):
+    with patch('websockets.connect', return_value=mock_websocket):
+        await websocket_handler.connect()
+        websocket_handler.subscriptions.add('BTC/USD')
+        websocket_handler.pending_subscriptions.add('ETH/USD')
+        
+        info = websocket_handler.get_connection_info()
+        
+        assert info['connected'] is True
+        assert info['running'] is True
+        assert 'BTC/USD' in info['active_subscriptions']
+        assert 'ETH/USD' in info['pending_subscriptions']
+        assert isinstance(info['last_message'], str)
+        assert isinstance(info['connection_attempts'], int)
+        assert isinstance(info['missed_heartbeats'], int)

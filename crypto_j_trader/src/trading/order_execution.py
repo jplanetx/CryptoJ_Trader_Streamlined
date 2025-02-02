@@ -1,9 +1,10 @@
 """
 Order Execution Module
-Implements the OrderExecutor class responsible for executing trading orders.
+Implements the OrderExecution base class and OrderExecutor class responsible for executing trading orders.
 """
 
 import logging
+from abc import ABC, abstractmethod
 from decimal import Decimal
 from typing import Dict, Optional
 from coinbase.rest import RESTClient
@@ -11,7 +12,24 @@ from coinbase.rest import RESTClient
 # Configure logging
 logger = logging.getLogger('order_execution')
 
-class OrderExecutor:
+class OrderExecution(ABC):
+    """
+    Abstract base class defining the interface for order execution.
+    """
+    @abstractmethod
+    def execute_order(self, order: Dict) -> Dict:
+        """
+        Execute a trading order.
+        
+        Args:
+            order (Dict): Order details including symbol, quantity, price, and side
+        
+        Returns:
+            Dict: Order execution result
+        """
+        pass
+
+class OrderExecutor(OrderExecution):
     def __init__(self, exchange_client: Optional[RESTClient], trading_pair: str, paper_trading: bool = False):
         """
         Initialize the OrderExecutor with the exchange client and trading pair.
@@ -30,19 +48,21 @@ class OrderExecutor:
             raise ValueError("Exchange client cannot be None in live trading mode")
         logger.info(f"OrderExecutor initialized for {trading_pair} in {'PAPER TRADING' if paper_trading else 'LIVE'} mode")
 
-    def execute_order(self, side: str, size: Decimal, order_type: str = 'market', limit_price: Optional[Decimal] = None) -> Dict:
+    def execute_order(self, order: Dict) -> Dict:
         """
-        Execute a trading order with basic error handling.
-
+        Execute a trading order.
+        
         Args:
-            side: 'buy' or 'sell'
-            size: Order size
-            order_type: 'market' or 'limit'
-            limit_price: Required for limit orders
-
+            order (Dict): Order details including symbol, quantity, price, and side
+        
         Returns:
-            Dict containing order details
+            Dict: Order execution result
         """
+        # Extract order details
+        side = order.get('side', '').lower()
+        size = Decimal(str(order.get('quantity', 0)))
+        order_type = order.get('type', 'market').lower()
+        limit_price = Decimal(str(order.get('price'))) if order.get('price') else None
         try:
             logger.info(f"Executing {side} order: {size} {self.trading_pair}")
 

@@ -48,3 +48,4 @@ config/secrets/
 
 # Dependencies
 vendor/*.whl
+.aider*

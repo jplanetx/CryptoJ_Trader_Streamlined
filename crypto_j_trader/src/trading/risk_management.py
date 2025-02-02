@@ -36,6 +36,7 @@ class RiskManager:
         self.position_size_limit = 0.1
         self.volatility_scaling = 15.0
         self.position_scaling_factor = 15000.0
+        self.total_exposure = 0.0
 
     def calculate_volatility(self, prices: list) -> float:
         """Calculate price volatility using standard deviation."""
@@ -50,6 +51,7 @@ class RiskManager:
     def assess_risk(self, position_value: float, trading_pair: str) -> bool:
         """Assess if current risk level is acceptable."""
         try:
+            # First validate market data
             is_ready, reason = self.validate_paper_trading(trading_pair)
             if not is_ready:
                 logger.error("Market data validation failed: %s", reason)
@@ -63,17 +65,27 @@ class RiskManager:
             prices = [trade['price'] for trade in recent_trades]
             volatility = self.calculate_volatility(prices)
             
-            # Exponential scaling for large positions
-            position_scale = math.exp(position_value / self.position_scaling_factor)
+            # Calculate new total exposure including this position
+            new_total_exposure = self.total_exposure + position_value
+            
+            # Exponential scaling for large positions relative to total exposure
+            position_scale = math.exp(new_total_exposure / self.position_scaling_factor)
             risk_exposure = position_value * volatility * position_scale
             
-            if risk_exposure > self.risk_threshold:
-                logger.warning("Risk exposure (%.2f) exceeds threshold (%.2f)", 
-                             risk_exposure, self.risk_threshold)
+            # Compare against threshold as a percentage
+            risk_percentage = (risk_exposure / self.position_scaling_factor) * 100
+            
+            if risk_percentage > self.risk_threshold:
+                logger.warning(
+                    "Risk exposure (%.2f%%) exceeds threshold (%.2f%%)", 
+                    risk_percentage, self.risk_threshold
+                )
                 return False
                 
-            logger.info("Risk assessment passed: exposure %.2f within threshold %.2f",
-                       risk_exposure, self.risk_threshold)
+            logger.info(
+                "Risk assessment passed: exposure %.2f%% within threshold %.2f%%",
+                risk_percentage, self.risk_threshold
+            )
             return True
             
         except Exception as e:
@@ -86,28 +98,32 @@ class RiskManager:
             # Calculate order value first to fail fast on obvious issues
             order_value = order_size * order_price
             if order_value > self.max_order_value:
-                return False, f"Order value {order_value} exceeds maximum {self.max_order_value}"
+                return False, f"Order value {order_value:.2f} exceeds maximum {self.max_order_value:.2f}"
 
-            # Then check order book availability
+            # Check order book
             order_book = self.market_data.get_order_book(trading_pair)
             if not order_book or not isinstance(order_book, dict):
-                return False, "Order book not available"
+                return False, "Insufficient liquidity: order book not available"
 
-            # Check liquidity last (most expensive check)
+            # Check liquidity
             try:
                 total_liquidity = sum(float(size) for size in order_book.get('bids', {}).values())
                 if total_liquidity == 0:
-                    return False, "No liquidity available"
+                    return False, "Insufficient liquidity: no orders in book"
                     
-                if order_size > total_liquidity * 0.1:
-                    return False, "Order size exceeds safe liquidity threshold"
+                if order_size > total_liquidity * 0.1:  # 10% of available liquidity
+                    return False, "Insufficient liquidity for order size"
             except (ValueError, TypeError, KeyError) as e:
-                return False, f"Order validation error: Invalid order book data - {str(e)}"
+                return False, f"Insufficient liquidity: invalid order book data - {str(e)}"
 
-            return True, "Order validated"
+            # Validate against risk threshold
+            if not self.assess_risk(order_value, trading_pair):
+                return False, "Order exceeds risk exposure threshold"
+
+            return True, "Order validated successfully"
             
         except Exception as e:
-            return False, f"Order validation error: {str(e)}"
+            return False, f"Order validation failed: {str(e)}"
 
     def validate_paper_trading(self, trading_pair: str) -> Tuple[bool, str]:
         """Validate if system is ready for paper trading."""
@@ -166,7 +182,7 @@ class RiskManager:
             return True, "Position validated"
             
         except Exception as e:
-            return False, f"Validation error: {str(e)}"
+            return False, f"Position validation failed: {str(e)}"
 
     def update_threshold(self, new_threshold: float) -> None:
         """Update the risk threshold."""
@@ -183,3 +199,8 @@ class RiskManager:
         """Set the emergency mode."""
         self.emergency_mode = mode
         logger.info("Emergency mode set to %s", mode)
+
+    def update_exposure(self, value: float) -> None:
+        """Update the total exposure tracking."""
+        self.total_exposure = max(0.0, self.total_exposure + value)
+        logger.info("Updated total exposure to %.2f", self.total_exposure)
