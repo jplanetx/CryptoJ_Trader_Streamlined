@@ -1,1 +1,1 @@
-# Source package initialization
+# Package initialization
