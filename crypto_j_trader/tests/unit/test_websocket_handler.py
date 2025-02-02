@@ -1,117 +1,273 @@
 import pytest
-import pytest_asyncio
+import json
 import asyncio
-from typing import Optional, Dict, List
+from unittest.mock import Mock, AsyncMock, patch
+from websockets.exceptions import ConnectionClosed
+from datetime import datetime, timedelta
+from ...src.trading.websocket_handler import WebSocketHandler
 
-class DummyWebSocket:
-    """
-    Dummy WebSocket implementation for testing WebSocket handler functionality.
-    Simulates connection management, message handling, and subscription features.
-    """
-    def __init__(self):
-        self.connected = False
-        self.subscriptions = set()
-        self.messages: List[Dict] = []
-        self.reconnect_attempts = 0
-        self.max_reconnect_attempts = 3
+@pytest.fixture
+def health_monitor():
+    """Create mock health monitor."""
+    monitor = AsyncMock()
+    monitor.record_latency = AsyncMock()
+    monitor.record_error = AsyncMock()
+    return monitor
 
-    async def connect(self):
-        await asyncio.sleep(0.05)
-        self.connected = True
-        return self.connected
+@pytest.fixture
+def message_handler():
+    """Create mock message handler."""
+    return AsyncMock()
 
-    async def disconnect(self):
-        await asyncio.sleep(0.05)
-        self.connected = False
-        return True
+@pytest.fixture
+def websocket_handler(health_monitor, message_handler):
+    """Create WebSocketHandler instance with mocks."""
+    return WebSocketHandler(
+        uri="wss://test.example.com/ws",
+        health_monitor=health_monitor,
+        message_handler=message_handler,
+        ping_interval=1
+    )
 
-    async def send_message(self, message: Dict):
-        await asyncio.sleep(0.05)
-        if not self.connected:
-            raise ConnectionError("WebSocket not connected")
-        self.messages.append(message)
-        return True
+@pytest.fixture
+def mock_websocket():
+    """Create mock websocket connection."""
+    websocket = AsyncMock()
+    websocket.send = AsyncMock()
+    websocket.recv = AsyncMock()
+    websocket.ping = AsyncMock()
+    websocket.close = AsyncMock()
+    return websocket
 
-    async def subscribe(self, channel: str):
-        await asyncio.sleep(0.05)
-        if not self.connected:
-            raise ConnectionError("WebSocket not connected")
-        self.subscriptions.add(channel)
-        return True
+@pytest.mark.asyncio
+async def test_connection_monitor(websocket_handler, mock_websocket):
+    """Test connection monitoring."""
+    websocket_handler.websocket = mock_websocket
+    websocket_handler.is_connected = True
+    websocket_handler.last_message_time = datetime.utcnow() - timedelta(seconds=60)
+    
+    # Start connection monitor and let it run briefly
+    task = asyncio.create_task(websocket_handler._connection_monitor())
+    await asyncio.sleep(1.1)
+    task.cancel()
+    
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    
+    assert websocket_handler.is_connected is False  # Should detect stale connection
 
-    async def attempt_reconnect(self) -> bool:
-        await asyncio.sleep(0.05)
-        if self.reconnect_attempts >= self.max_reconnect_attempts:
-            return False
-        self.reconnect_attempts += 1
-        self.connected = True
-        return True
+@pytest.mark.asyncio
+async def test_resubscribe(websocket_handler, mock_websocket):
+    """Test resubscription after reconnection."""
+    websocket_handler.websocket = mock_websocket
+    websocket_handler.is_connected = True
+    websocket_handler.subscriptions.add("test_channel_1")
+    websocket_handler.subscriptions.add("test_channel_2")
+    
+    # Clear subscriptions and resubscribe
+    channels = list(websocket_handler.subscriptions)
+    websocket_handler.subscriptions.clear()
+    await websocket_handler._resubscribe()
+    
+    assert all(channel in websocket_handler.subscriptions for channel in channels)
+    assert mock_websocket.send.call_count == len(channels)
 
-@pytest_asyncio.fixture
-async def websocket_system():
-    """Fixture providing a dummy WebSocket system for testing."""
-    return DummyWebSocket()
+@pytest.mark.asyncio
+async def test_send_message(websocket_handler, mock_websocket):
+    """Test message sending."""
+    websocket_handler.websocket = mock_websocket
+    websocket_handler.is_connected = True
+    
+    test_message = {'type': 'test', 'data': 'test_data'}
+    result = await websocket_handler.send_message(test_message)
+    
+    assert result is True
+    mock_websocket.send.assert_called_once_with(json.dumps(test_message))
 
-class TestWebSocketHandler:
-    @pytest.mark.asyncio
-    async def test_connection_management(self, websocket_system):
-        # Test basic connection management.
-        assert not websocket_system.connected, "WebSocket should start disconnected."
-        connected = await websocket_system.connect()
-        assert connected, "WebSocket should connect successfully."
-        assert websocket_system.connected, "WebSocket should be connected after connect()."
-        disconnected = await websocket_system.disconnect()
-        assert disconnected, "WebSocket should disconnect successfully."
-        assert not websocket_system.connected, "WebSocket should be disconnected after disconnect()."
-
-    @pytest.mark.asyncio
-    async def test_reconnection_logic(self, websocket_system):
-        # Test reconnection attempts and limits.
-        await websocket_system.connect()
-        await websocket_system.disconnect()
+@pytest.mark.asyncio
+async def test_send_message_not_connected(websocket_handler, mock_websocket):
+    """Test message sending when not connected."""
+    websocket_handler.is_connected = False
+    
+    with patch('websockets.connect', AsyncMock(return_value=mock_websocket)):
+        test_message = {'type': 'test', 'data': 'test_data'}
+        result = await websocket_handler.send_message(test_message)
         
-        # Test successful reconnection
-        success = await websocket_system.attempt_reconnect()
-        assert success, "First reconnection attempt should succeed."
-        assert websocket_system.reconnect_attempts == 1, "Reconnection attempts should be tracked."
-        
-        # Test reconnection limit
-        for _ in range(websocket_system.max_reconnect_attempts):
-            await websocket_system.disconnect()
-            await websocket_system.attempt_reconnect()
-        
-        await websocket_system.disconnect()
-        final_attempt = await websocket_system.attempt_reconnect()
-        assert not final_attempt, "Should fail after max reconnection attempts."
+        assert result is True
+        assert websocket_handler.is_connected is True
+        mock_websocket.send.assert_called_once()
 
-    @pytest.mark.asyncio
-    async def test_message_processing(self, websocket_system):
-        # Test message sending and processing.
-        await websocket_system.connect()
-        
-        # Test sending message when connected
-        message = {"type": "subscribe", "product_ids": ["BTC-USD"]}
-        sent = await websocket_system.send_message(message)
-        assert sent, "Message should be sent successfully when connected."
-        assert message in websocket_system.messages, "Message should be recorded."
-        
-        # Test sending message when disconnected
-        await websocket_system.disconnect()
-        with pytest.raises(ConnectionError, match="WebSocket not connected"):
-            await websocket_system.send_message({"type": "ping"})
+@pytest.mark.asyncio
+async def test_connection_status(websocket_handler, mock_websocket):
+    """Test connection status reporting."""
+    websocket_handler.websocket = mock_websocket
+    websocket_handler.is_connected = True
+    websocket_handler.subscriptions.add("test_channel")
+    
+    status = websocket_handler.get_connection_status()
+    
+    assert status['connected'] is True
+    assert status['uri'] == "wss://test.example.com/ws"
+    assert "test_channel" in status['subscriptions']
+    assert 'last_message' in status
+    assert 'connection_attempts' in status
 
-    @pytest.mark.asyncio
-    async def test_subscription_handling(self, websocket_system):
-        # Test subscription management.
-        await websocket_system.connect()
+@pytest.mark.asyncio
+async def test_reset_connection(websocket_handler, mock_websocket):
+    """Test connection reset."""
+    websocket_handler.websocket = mock_websocket
+    websocket_handler.is_connected = True
+    
+    with patch('websockets.connect', AsyncMock(return_value=mock_websocket)):
+        result = await websocket_handler.reset_connection()
         
-        # Test subscribing to channels
-        channel = "BTC-USD"
-        subscribed = await websocket_system.subscribe(channel)
-        assert subscribed, "Subscription should succeed when connected."
-        assert channel in websocket_system.subscriptions, "Channel should be recorded in subscriptions."
+        assert result is True
+        assert websocket_handler.connection_attempts == 0
+        mock_websocket.close.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_cleanup_tasks(websocket_handler):
+    """Test background task cleanup."""
+    # Create some dummy tasks
+    async def dummy_task():
+        while True:
+            await asyncio.sleep(0.1)
+    
+    task1 = asyncio.create_task(dummy_task())
+    task2 = asyncio.create_task(dummy_task())
+    websocket_handler.connection_tasks = {task1, task2}
+    
+    await websocket_handler._cleanup_tasks()
+    
+    assert len(websocket_handler.connection_tasks) == 0
+    assert task1.cancelled()
+    assert task2.cancelled()
+
+@pytest.mark.asyncio
+async def test_handle_connection_error(websocket_handler, mock_websocket):
+    """Test connection error handling."""
+    websocket_handler.websocket = mock_websocket
+    websocket_handler.is_connected = True
+    
+    with patch('websockets.connect', AsyncMock(return_value=mock_websocket)):
+        await websocket_handler._handle_connection_error()
         
-        # Test subscribing when disconnected
-        await websocket_system.disconnect()
-        with pytest.raises(ConnectionError, match="WebSocket not connected"):
-            await websocket_system.subscribe("ETH-USD")
+        assert not websocket_handler.is_connected
+        mock_websocket.close.assert_called_once()
+        # Should attempt reconnection
+        await asyncio.sleep(0.1)
+        assert websocket_handler.is_connected
+
+@pytest.mark.asyncio
+async def test_websocket_message_handling_with_multiple_subscriptions(
+    websocket_handler, mock_websocket, message_handler
+):
+    """Test message handling with multiple subscriptions."""
+    websocket_handler.websocket = mock_websocket
+    websocket_handler.is_connected = True
+    
+    # Subscribe to multiple channels
+    channels = ["channel1", "channel2", "channel3"]
+    for channel in channels:
+        await websocket_handler.subscribe(channel)
+    
+    # Test messages from different channels
+    messages = [
+        {'channel': 'channel1', 'data': 'data1'},
+        {'channel': 'channel2', 'data': 'data2'},
+        {'channel': 'channel3', 'data': 'data3'}
+    ]
+    
+    for msg in messages:
+        mock_websocket.recv.return_value = json.dumps(msg)
+        task = asyncio.create_task(websocket_handler._message_handler_loop())
+        await asyncio.sleep(0.1)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        
+        message_handler.assert_awaited_with(msg)
+
+@pytest.mark.asyncio
+async def test_websocket_reconnection_with_exponential_backoff(
+    websocket_handler, mock_websocket
+):
+    """Test reconnection with exponential backoff."""
+    connect_times = []
+    
+    # Mock connect to track call times
+    async def mock_connect(*args, **kwargs):
+        connect_times.append(time.time())
+        raise ConnectionClosed(None, None)
+    
+    with patch('websockets.connect', mock_connect):
+        task = asyncio.create_task(websocket_handler.connect())
+        await asyncio.sleep(3)  # Allow for multiple reconnection attempts
+        task.cancel()
+        
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        
+    # Verify increasing delays between attempts
+    delays = [connect_times[i+1] - connect_times[i] for i in range(len(connect_times)-1)]
+    assert all(delays[i+1] > delays[i] for i in range(len(delays)-1))
+
+@pytest.mark.asyncio
+async def test_websocket_subscription_recovery(websocket_handler, mock_websocket):
+    """Test subscription recovery after reconnection."""
+    websocket_handler.websocket = mock_websocket
+    websocket_handler.is_connected = True
+    
+    # Add initial subscriptions
+    initial_channels = ["channel1", "channel2"]
+    for channel in initial_channels:
+        await websocket_handler.subscribe(channel)
+    
+    # Simulate disconnect and reconnect
+    await websocket_handler._handle_connection_error()
+    assert not websocket_handler.is_connected
+    
+    with patch('websockets.connect', AsyncMock(return_value=mock_websocket)):
+        await websocket_handler.connect()
+        
+        # Verify all subscriptions were restored
+        for channel in initial_channels:
+            assert channel in websocket_handler.subscriptions
+        
+        # Verify subscription messages were sent
+        assert mock_websocket.send.call_count >= len(initial_channels)
+
+@pytest.mark.asyncio
+async def test_websocket_health_monitoring_integration(
+    websocket_handler, mock_websocket, health_monitor
+):
+    """Test integration with health monitoring."""
+    websocket_handler.websocket = mock_websocket
+    websocket_handler.is_connected = True
+    
+    # Test latency recording on connect
+    with patch('websockets.connect', AsyncMock(return_value=mock_websocket)):
+        await websocket_handler.connect()
+        health_monitor.record_latency.assert_awaited_with('websocket_connect', pytest.approx(any(), abs=1000))
+    
+    # Test error recording
+    mock_websocket.recv.side_effect = Exception("Test error")
+    task = asyncio.create_task(websocket_handler._message_handler_loop())
+    await asyncio.sleep(0.1)
+    task.cancel()
+    
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    
+    health_monitor.record_error.assert_awaited()
+
+if __name__ == '__main__':
+    pytest.main([__file__, '-v'])

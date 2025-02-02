@@ -52,6 +52,11 @@ class TradingConfig:
         """Get exchange settings"""
         return self.config.get('exchange_settings', {})
     
+    @property
+    def websocket(self) -> Dict[str, Any]:
+        """Get websocket settings"""
+        return self.config.get('websocket', {})
+
     def validate(self) -> bool:
         """Validate configuration"""
         # Check CDP credentials file exists and is not empty
@@ -64,7 +69,7 @@ class TradingConfig:
             return False
 
         # Check configuration parameters
-        required_config = ['trading_params', 'exchange_settings']
+        required_config = ['trading_params', 'exchange_settings', 'websocket']
         missing_config = [conf for conf in required_config if conf not in self.config]
         if missing_config:
             print(f"Missing configuration sections: {missing_config}")

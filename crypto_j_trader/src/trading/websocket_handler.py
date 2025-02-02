@@ -1,359 +1,339 @@
-"""WebSocket handler for real-time market data."""
 import asyncio
-import logging
 import json
+import logging
 import websockets
-from typing import Dict, Any, Optional, Callable, List, Set
-from datetime import datetime, timezone
-from websockets.exceptions import ConnectionClosed, WebSocketException
-
-logger = logging.getLogger(__name__)
+import time
+import random
+from typing import Dict, Set, Optional, Callable, Any
+from datetime import datetime, timedelta
+from websockets.exceptions import ConnectionClosed, InvalidStatusCode
 
 class WebSocketHandler:
-    def __init__(self, config: Dict[str, Any]):
-        """Initialize WebSocket handler with configuration."""
-        self.config = config['websocket']
-        self.url = self.config['url']
-        self.ping_interval = self.config.get('ping_interval', 30)
-        self.reconnect_delay = self.config.get('reconnect_delay', 5)
-        self.max_reconnect_delay = self.config.get('max_reconnect_delay', 300)  # 5 minutes
-        self.subscription_retry_delay = self.config.get('subscription_retry_delay', 5)
-        self.heartbeat_timeout = self.config.get('heartbeat_timeout', 60)  # seconds
-        self.max_missed_heartbeats = self.config.get('max_missed_heartbeats', 3)
+    def __init__(self, 
+                 uri: str,
+                 health_monitor: Any,
+                 message_handler: Optional[Callable] = None,
+                 ping_interval: int = 30):
+        """
+        Initialize WebSocket handler with connection management and health monitoring.
+
+        Args:
+            uri (str): WebSocket endpoint URI
+            health_monitor (Any): Health monitoring instance
+            message_handler (Optional[Callable]): Custom message handler function
+            ping_interval (int): Ping interval in seconds
+        """
+        self.uri = uri
+        self.health_monitor = health_monitor
+        self.message_handler = message_handler
+        self.ping_interval = ping_interval
+        self.logger = logging.getLogger(__name__)
         
-        self._ws = None
-        self._is_connected = False
-        self.running = False
+        self.websocket: Optional[websockets.WebSocketClientProtocol] = None
         self.subscriptions: Set[str] = set()
-        self.pending_subscriptions: Set[str] = set()
-        self.last_message_time = datetime.now(timezone.utc)
+        self.is_connected = False
+        self.should_reconnect = True
+        self.last_message_time = datetime.utcnow()
         self.connection_attempts = 0
-        self.missed_heartbeats = 0
-        self.message_handlers: List[Callable[[Dict[str, Any]], Any]] = []
-        self._message_task = None
-        self._heartbeat_task = None
-        self._subscription_task = None
+        self.max_reconnect_delay = 300  # Maximum reconnection delay in seconds
+        self.connection_tasks = set()
 
-    @property
-    def is_connected(self) -> bool:
-        """Return current connection status."""
-        return self._is_connected and self._ws is not None
+    def _start_background_tasks(self) -> None:
+        """Start background tasks for connection management."""
+        self.connection_tasks = set()
+        self.connection_tasks.add(asyncio.create_task(self._heartbeat()))
+        self.connection_tasks.add(asyncio.create_task(self._message_handler_loop()))
+        self.connection_tasks.add(asyncio.create_task(self._connection_monitor()))
 
-    async def _heartbeat_loop(self) -> None:
-        """Monitor connection health using heartbeats."""
-        while self.running and self._is_connected:
-            try:
-                await asyncio.sleep(self.ping_interval)
-                time_since_last = (datetime.now(timezone.utc) - self.last_message_time).total_seconds()
-                
-                if time_since_last > self.heartbeat_timeout:
-                    self.missed_heartbeats += 1
-                    logger.warning(f"Missed heartbeat {self.missed_heartbeats}/{self.max_missed_heartbeats}")
-                    
-                    if self.missed_heartbeats >= self.max_missed_heartbeats:
-                        logger.error("Maximum missed heartbeats reached, forcing reconnection")
-                        self._is_connected = False
-                        if self._ws:
-                            await self._ws.close()
-                        break
-                else:
-                    self.missed_heartbeats = 0
-                    
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Error in heartbeat loop: {e}")
-
-    async def _subscription_manager(self) -> None:
-        """Manage subscriptions and retry failed ones."""
-        while self.running:
-            try:
-                # Process pending subscriptions
-                if self._is_connected and self.pending_subscriptions:
-                    for channel in list(self.pending_subscriptions):
-                        await self._subscribe_with_retry(channel)
-                        await asyncio.sleep(0.5)  # Prevent flooding
-                
-                # Verify existing subscriptions
-                if self._is_connected and self.subscriptions:
-                    subscription_status = await self._verify_subscriptions()
-                    if not subscription_status:
-                        logger.warning("Some subscriptions are invalid, retrying...")
-                        for channel in self.subscriptions:
-                            self.pending_subscriptions.add(channel)
-                
-                await asyncio.sleep(self.subscription_retry_delay)
-                
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Error in subscription manager: {e}")
-                await asyncio.sleep(self.subscription_retry_delay)
-
-    async def start(self) -> None:
-        """Start the WebSocket handler and maintain connection recovery."""
-        self.running = True
-        while self.running:
-            try:
-                if not await self.connect():
-                    delay = min(self.reconnect_delay * (2 ** self.connection_attempts), 
-                              self.max_reconnect_delay)
-                    logger.info(f"Reconnecting in {delay} seconds...")
-                    await asyncio.sleep(delay)
-                    continue
-
-                # Start background tasks
-                self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
-                self._subscription_task = asyncio.create_task(self._subscription_manager())
-                self._message_task = asyncio.create_task(self._message_loop())
-
-                # Wait for any task to complete (which indicates an issue)
-                done, pending = await asyncio.wait(
-                    [self._heartbeat_task, self._subscription_task, self._message_task],
-                    return_when=asyncio.FIRST_COMPLETED
-                )
-
-                # Cancel remaining tasks
-                for task in pending:
-                    task.cancel()
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass
-
-                # Reset connection state
-                self._is_connected = False
-                self.connection_attempts += 1
-
-            except Exception as e:
-                logger.error(f"Critical WebSocket error: {e}")
-            finally:
-                if self.running:
-                    await asyncio.sleep(self.reconnect_delay)
-
-    async def stop(self) -> None:
-        """Stop the WebSocket handler and cleanup resources."""
-        self.running = False
-        
-        # Cancel all background tasks
-        tasks = [self._message_task, self._heartbeat_task, self._subscription_task]
-        for task in tasks:
-            if task and not task.done():
+    async def _cleanup_tasks(self) -> None:
+        """Clean up background tasks."""
+        for task in self.connection_tasks:
+            if not task.done():
                 task.cancel()
                 try:
                     await task
                 except asyncio.CancelledError:
                     pass
-        
-        # Close connection
-        await self.disconnect()
-        
-        # Reset state
-        self.subscriptions.clear()
-        self.pending_subscriptions.clear()
-        self.connection_attempts = 0
-        self.missed_heartbeats = 0
+        self.connection_tasks.clear()
 
     async def connect(self) -> bool:
-        """Establish WebSocket connection with retry logic."""
+        """
+        Establish WebSocket connection with retry logic.
+
+        Returns:
+            bool: True if connection successful, False otherwise
+        """
         try:
-            if self._ws:
-                await self.disconnect()
+            if self.is_connected:
+                return True
+
+            self.connection_attempts += 1
+            delay = min(2 ** self.connection_attempts + random.uniform(0, 1), 
+                       self.max_reconnect_delay)
+
+            self.logger.info(f"Attempting connection to {self.uri}")
+            start_time = time.time()
             
-            # Initialize connection with ping_interval
-            self._ws = await websockets.connect(
-                self.url,
+            self.websocket = await websockets.connect(
+                self.uri,
                 ping_interval=self.ping_interval,
-                close_timeout=5,
-                extra_headers=self.config.get('headers', {})
+                ping_timeout=self.ping_interval // 2
             )
             
-            # Send authentication if required
-            if 'auth' in self.config:
-                auth_message = {
-                    "type": "auth",
-                    **self.config['auth']
-                }
-                await self._ws.send(json.dumps(auth_message))
+            self.is_connected = True
+            self.connection_attempts = 0
             
-            self._is_connected = True
-            self.last_message_time = datetime.now(timezone.utc)
-            self.missed_heartbeats = 0
-            logger.info("WebSocket connected successfully")
+            # Record connection latency
+            latency = (time.time() - start_time) * 1000
+            await self.health_monitor.record_latency('websocket_connect', latency)
+
+            # Start background tasks
+            self._start_background_tasks()
             
-            # Add existing subscriptions to pending for resubscription
-            self.pending_subscriptions.update(self.subscriptions)
-            self.subscriptions.clear()
+            # Resubscribe to previous subscriptions
+            await self._resubscribe()
             
+            self.logger.info("WebSocket connection established")
             return True
-            
+
         except Exception as e:
-            logger.error(f"WebSocket connection failed: {e}")
-            self._is_connected = False
+            await self.health_monitor.record_error(f"websocket_connect_error: {str(e)}")
+            self.logger.error(f"Connection error: {str(e)}")
+            
+            if self.should_reconnect:
+                self.logger.info(f"Reconnecting in {delay} seconds")
+                await asyncio.sleep(delay)
+                return await self.connect()
+            
             return False
 
     async def disconnect(self) -> None:
-        """Close the WebSocket connection."""
-        if self._ws:
-            try:
-                await self._ws.close()
-            except Exception as e:
-                logger.error(f"Error closing WebSocket: {e}")
-            finally:
-                self._ws = None
-                self._is_connected = False
-                # Move all subscriptions to pending for next connection
-                self.pending_subscriptions.update(self.subscriptions)
-                self.subscriptions.clear()
-
-    async def subscribe(self, channel: str) -> None:
-        """Subscribe to a channel."""
-        self.pending_subscriptions.add(channel)
-        if self._is_connected:
-            await self._subscribe_with_retry(channel)
-
-    async def _subscribe_with_retry(self, channel: str, max_attempts: int = 3) -> bool:
-        """Subscribe to a channel with retry logic."""
-        if not self._is_connected or not self._ws:
-            return False
-
-        for attempt in range(max_attempts):
-            try:
-                subscription_message = {
-                    "type": "subscribe",
-                    "channel": channel
-                }
-                await self._ws.send(json.dumps(subscription_message))
-                
-                # Wait for subscription confirmation
-                confirmation = await self._wait_for_subscription_confirmation(channel)
-                if confirmation:
-                    self.subscriptions.add(channel)
-                    self.pending_subscriptions.discard(channel)
-                    logger.info(f"Successfully subscribed to {channel}")
-                    return True
-                    
-            except Exception as e:
-                logger.error(f"Subscription attempt {attempt + 1} failed for {channel}: {e}")
-                if attempt < max_attempts - 1:
-                    await asyncio.sleep(self.subscription_retry_delay)
-                    
-        return False
-
-    async def _wait_for_subscription_confirmation(self, channel: str, timeout: float = 5.0) -> bool:
-        """Wait for subscription confirmation message."""
+        """Gracefully close WebSocket connection."""
         try:
-            start_time = datetime.now(timezone.utc)
-            while (datetime.now(timezone.utc) - start_time).total_seconds() < timeout:
-                if channel in self.subscriptions:
-                    return True
-                await asyncio.sleep(0.1)
-            return False
-        except Exception as e:
-            logger.error(f"Error waiting for subscription confirmation: {e}")
-            return False
-
-    async def _verify_subscriptions(self) -> bool:
-        """Verify all subscriptions are active."""
-        try:
-            if not self._is_connected or not self._ws:
-                return False
-                
-            status_message = {
-                "type": "status",
-                "command": "subscriptions"
-            }
-            await self._ws.send(json.dumps(status_message))
-            return True
+            self.should_reconnect = False
+            await self._cleanup_tasks()
             
+            if self.websocket:
+                await self.websocket.close()
+            
+            self.is_connected = False
+            self.logger.info("WebSocket connection closed")
         except Exception as e:
-            logger.error(f"Error verifying subscriptions: {e}")
+            self.logger.error(f"Disconnect error: {str(e)}")
+
+    async def subscribe(self, channel: str) -> bool:
+        """
+        Subscribe to a WebSocket channel.
+
+        Args:
+            channel (str): Channel to subscribe to
+
+        Returns:
+            bool: True if subscription successful, False otherwise
+        """
+        try:
+            if not self.is_connected:
+                await self.connect()
+
+            if channel in self.subscriptions:
+                return True
+
+            message = {
+                'type': 'subscribe',
+                'channel': channel
+            }
+            
+            start_time = time.time()
+            await self.websocket.send(json.dumps(message))
+            
+            # Record subscription latency
+            latency = (time.time() - start_time) * 1000
+            await self.health_monitor.record_latency('websocket_subscribe', latency)
+
+            self.subscriptions.add(channel)
+            self.logger.info(f"Subscribed to channel: {channel}")
+            return True
+
+        except Exception as e:
+            await self.health_monitor.record_error(f"websocket_subscribe_error: {str(e)}")
+            self.logger.error(f"Subscription error for channel {channel}: {str(e)}")
             return False
 
-    async def unsubscribe(self, channel: str) -> None:
-        """Unsubscribe from a channel."""
-        self.pending_subscriptions.discard(channel)
-        
-        if not self._is_connected or not self._ws:
-            self.subscriptions.discard(channel)
-            return
+    async def unsubscribe(self, channel: str) -> bool:
+        """
+        Unsubscribe from a WebSocket channel.
 
+        Args:
+            channel (str): Channel to unsubscribe from
+
+        Returns:
+            bool: True if unsubscription successful, False otherwise
+        """
         try:
-            unsubscribe_message = {
-                "type": "unsubscribe",
-                "channel": channel
-            }
-            await self._ws.send(json.dumps(unsubscribe_message))
-            self.subscriptions.discard(channel)
-            logger.info(f"Unsubscribed from channel: {channel}")
-        except Exception as e:
-            logger.error(f"Unsubscription error for {channel}: {e}")
+            if not self.is_connected or channel not in self.subscriptions:
+                return True
 
-    async def _message_loop(self) -> None:
-        """Main loop to receive and process messages."""
-        while self._is_connected and self.running and self._ws:
+            message = {
+                'type': 'unsubscribe',
+                'channel': channel
+            }
+            
+            await self.websocket.send(json.dumps(message))
+            self.subscriptions.remove(channel)
+            self.logger.info(f"Unsubscribed from channel: {channel}")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Unsubscription error for channel {channel}: {str(e)}")
+            return False
+
+    async def _heartbeat(self) -> None:
+        """Maintain connection with periodic ping/pong."""
+        while self.is_connected and self.should_reconnect:
             try:
-                message = await self._ws.recv()
-                self.last_message_time = datetime.now(timezone.utc)
-                self.missed_heartbeats = 0
-                
-                # Parse message if needed
-                if isinstance(message, str):
-                    message = json.loads(message)
-                
-                # Handle subscription confirmations
-                if message.get('type') == 'subscribed':
-                    channel = message.get('channel')
-                    if channel:
-                        self.subscriptions.add(channel)
-                        self.pending_subscriptions.discard(channel)
-                
-                await self.on_message(message)
+                await asyncio.sleep(self.ping_interval)
+                if self.websocket:
+                    ping_start = time.time()
+                    pong_waiter = await self.websocket.ping()
+                    await pong_waiter
+                    latency = (time.time() - ping_start) * 1000
+                    await self.health_monitor.record_latency('websocket_ping', latency)
+                    self.last_message_time = datetime.utcnow()
+            except Exception as e:
+                self.logger.error(f"Heartbeat error: {str(e)}")
+                await self._handle_connection_error()
+
+    async def _message_handler_loop(self) -> None:
+        """Handle incoming WebSocket messages."""
+        while self.is_connected and self.should_reconnect:
+            try:
+                if not self.websocket:
+                    await asyncio.sleep(1)
+                    continue
+
+                message = await self.websocket.recv()
+                self.last_message_time = datetime.utcnow()
+
+                if self.message_handler:
+                    start_time = time.time()
+                    await self.message_handler(json.loads(message))
+                    latency = (time.time() - start_time) * 1000
+                    await self.health_monitor.record_latency('message_processing', latency)
 
             except ConnectionClosed:
-                logger.warning("WebSocket connection closed")
-                self._is_connected = False
-                break
-            except asyncio.CancelledError:
-                logger.info("Message loop cancelled")
-                raise
+                self.logger.warning("WebSocket connection closed unexpectedly")
+                await self._handle_connection_error()
             except json.JSONDecodeError as e:
-                logger.error(f"Invalid JSON message received: {e}")
+                self.logger.error(f"Message parsing error: {str(e)}")
+                await self.health_monitor.record_error('message_parse_error')
             except Exception as e:
-                logger.error(f"Error processing message: {e}")
-                if not (self.running and self._is_connected):
-                    break
-                await asyncio.sleep(1)  # Prevent tight loop on persistent errors
+                self.logger.error(f"Message handling error: {str(e)}")
+                await self.health_monitor.record_error('message_handling_error')
 
-    async def on_message(self, message: Dict[str, Any]) -> None:
-        """Process a received message by dispatching it to all handlers."""
-        if not self.running:
-            return
-
-        for handler in self.message_handlers:
+    async def _connection_monitor(self) -> None:
+        """Monitor connection health and trigger reconnection if needed."""
+        while self.should_reconnect:
             try:
-                await handler(message)
+                await asyncio.sleep(self.ping_interval)
+                
+                if self.is_connected:
+                    # Check last message time
+                    time_since_last = (datetime.utcnow() - self.last_message_time).total_seconds()
+                    
+                    if time_since_last > self.ping_interval * 2:
+                        self.logger.warning(f"No messages received for {time_since_last} seconds")
+                        await self._handle_connection_error()
+                        
             except Exception as e:
-                logger.error(f"Error in message handler: {e}")
+                self.logger.error(f"Connection monitor error: {str(e)}")
 
-    def add_message_handler(self, handler: Callable[[Dict[str, Any]], Any]) -> None:
-        """Register a new message handler."""
-        if handler not in self.message_handlers:
-            self.message_handlers.append(handler)
+    async def _handle_connection_error(self) -> None:
+        """Handle connection errors and initiate reconnection."""
+        try:
+            self.is_connected = False
+            await self._cleanup_tasks()
+            
+            if self.websocket:
+                await self.websocket.close()
+                self.websocket = None
 
-    def remove_message_handler(self, handler: Callable[[Dict[str, Any]], Any]) -> None:
-        """Remove a message handler."""
-        if handler in self.message_handlers:
-            self.message_handlers.remove(handler)
+            if self.should_reconnect:
+                await self.connect()
 
-    def get_connection_info(self) -> Dict[str, Any]:
-        """Get current connection status and statistics."""
+        except Exception as e:
+            self.logger.error(f"Error handling connection error: {str(e)}")
+
+    async def _resubscribe(self) -> None:
+        """Resubscribe to all previous channels after reconnection."""
+        try:
+            channels = list(self.subscriptions)
+            self.subscriptions.clear()
+            
+            for channel in channels:
+                await self.subscribe(channel)
+                
+        except Exception as e:
+            self.logger.error(f"Resubscription error: {str(e)}")
+            await self.health_monitor.record_error('resubscription_error')
+
+    async def send_message(self, message: Dict[str, Any]) -> bool:
+        """
+        Send a message through the WebSocket connection.
+
+        Args:
+            message (Dict[str, Any]): Message to send
+
+        Returns:
+            bool: True if message sent successfully, False otherwise
+        """
+        try:
+            if not self.is_connected:
+                await self.connect()
+
+            if self.websocket:
+                start_time = time.time()
+                await self.websocket.send(json.dumps(message))
+                
+                # Record message sending latency
+                latency = (time.time() - start_time) * 1000
+                await self.health_monitor.record_latency('message_send', latency)
+                return True
+
+            return False
+
+        except Exception as e:
+            self.logger.error(f"Message sending error: {str(e)}")
+            await self.health_monitor.record_error('message_send_error')
+            return False
+
+    def get_connection_status(self) -> Dict[str, Any]:
+        """
+        Get current connection status and metrics.
+
+        Returns:
+            Dict[str, Any]: Connection status information
+        """
         return {
             'connected': self.is_connected,
-            'running': self.running,
+            'uri': self.uri,
+            'subscriptions': list(self.subscriptions),
             'last_message': self.last_message_time.isoformat(),
-            'connection_attempts': self.connection_attempts,
-            'missed_heartbeats': self.missed_heartbeats,
-            'active_subscriptions': list(self.subscriptions),
-            'pending_subscriptions': list(self.pending_subscriptions)
+            'connection_attempts': self.connection_attempts
         }
+
+    async def reset_connection(self) -> bool:
+        """
+        Reset and reestablish WebSocket connection.
+
+        Returns:
+            bool: True if reset successful, False otherwise
+        """
+        try:
+            await self.disconnect()
+            self.should_reconnect = True
+            self.connection_attempts = 0
+            return await self.connect()
+
+        except Exception as e:
+            self.logger.error(f"Connection reset error: {str(e)}")
+            return False

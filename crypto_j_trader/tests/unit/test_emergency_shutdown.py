@@ -1,322 +1,186 @@
-"""Tests for emergency shutdown functionality."""
-
 import pytest
-import asyncio
-import os
 import json
-from datetime import datetime, timedelta
-import pandas as pd
-from unittest.mock import Mock, AsyncMock, patch, mock_open
-
-from crypto_j_trader.src.trading.emergency_manager import EmergencyManager
-from crypto_j_trader.src.trading.risk_management import RiskManager
+from pathlib import Path
+from datetime import datetime
+from decimal import Decimal
+from unittest.mock import AsyncMock, patch, Mock
+from ...src.trading.emergency_manager import EmergencyManager
 
 @pytest.fixture
-def config():
-    return {
-        'emergency_price_change_threshold': 0.1,
-        'volume_spike_threshold': 5.0,
-        'max_data_age_seconds': 300,
-        'max_position_close_attempts': 3,
-        'position_close_retry_delay': 1,
-        'emergency_state_file': 'test_emergency_state.json',
-        'trading_pairs': [
-            {'pair': 'BTC-USD', 'weight': 0.6},
-            {'pair': 'ETH-USD', 'weight': 0.4}
-        ],
-        'risk_management': {
-            'daily_loss_limit': 0.02,
-            'position_size_limit': 0.1,
-            'stop_loss_pct': 0.05,
-            'max_positions': 5,
-            'max_exposure': 0.5
+def config_file(tmp_path):
+    """Create a temporary config file."""
+    config = {
+        'max_positions': {
+            'BTC-USD': 10.0,
+            'ETH-USD': 100.0
+        },
+        'risk_limits': {
+            'BTC-USD': 50000.0,
+            'ETH-USD': 20000.0
+        },
+        'emergency_thresholds': {
+            'BTC-USD': 100000.0,
+            'ETH-USD': 50000.0
         }
     }
+    config_path = tmp_path / "test_config.json"
+    with open(config_path, 'w') as f:
+        json.dump(config, f)
+    return str(config_path)
 
 @pytest.fixture
-def mock_market_data():
-    now = datetime.now()
-    index = pd.date_range(end=now, periods=10, freq='1min')
-    
-    df = pd.DataFrame({
-        'price': [50000] * 10,  # Stable price
-        'size': [100] * 10,     # Stable volume
-        'low': [49900] * 10,
-        'high': [50100] * 10,
-        'open': [49950] * 10,
-        'close': [50050] * 10,
-    }, index=index)
-    
-    return {'BTC-USD': df}
+def state_file(tmp_path):
+    """Create a temporary state file path."""
+    return str(tmp_path / "emergency_state.json")
 
 @pytest.fixture
-def mock_websocket():
-    mock = AsyncMock()
-    mock.last_message_time = datetime.now()
-    return mock
-
-@pytest.fixture
-def emergency_manager(config):
-    return EmergencyManager(config)
-
-@pytest.fixture
-def risk_manager(config, mock_market_data_handler):
-    risk_manager = RiskManager(config, mock_market_data_handler)
-    risk_manager.validate_new_position = Mock(return_value = False)
-    return risk_manager
-
-@pytest.fixture
-def mock_market_data_handler():
-    market_data_handler = Mock()
-    market_data_handler.is_running = True
-    market_data_handler.is_data_fresh.return_value = True
-    return market_data_handler
+def emergency_manager(config_file, state_file):
+    """Create an EmergencyManager instance."""
+    return EmergencyManager(config_file, state_file)
 
 @pytest.mark.asyncio
-async def test_emergency_price_movement(emergency_manager, mock_market_data_handler):
-    """Test emergency shutdown triggers on extreme price movement"""
-    df = mock_market_data['BTC-USD'].copy()
-    df.iloc[-1, df.columns.get_loc('price')] = 60000  # 20% increase
-    mock_market_data['BTC-USD'] = df
-
-    result = await emergency_manager.check_emergency_conditions(
-        'BTC-USD',
-        60000,  # Current price
-        mock_market_data
+async def test_validate_new_position_normal(emergency_manager):
+    """Test position validation under normal conditions."""
+    result = await emergency_manager.validate_new_position(
+        'BTC-USD', 
+        size=1.0, 
+        price=40000.0
     )
     assert result is True
 
 @pytest.mark.asyncio
-async def test_emergency_volume_spike(emergency_manager, mock_market_data):
-    """Test emergency shutdown triggers on volume spike"""
-    df = mock_market_data['BTC-USD'].copy()
-    df.iloc[-1, df.columns.get_loc('size')] = 1000  # 10x volume spike
-    mock_market_data['BTC-USD'] = df
-    
-    result = await emergency_manager.check_emergency_conditions(
+async def test_validate_new_position_emergency_mode(emergency_manager):
+    """Test position validation during emergency mode."""
+    emergency_manager.emergency_mode = True
+    result = await emergency_manager.validate_new_position(
         'BTC-USD',
-        50000,
-        mock_market_data
+        size=1.0,
+        price=40000.0
     )
-    assert result is True
+    assert result is False
 
 @pytest.mark.asyncio
-async def test_position_close_retry_mechanism(emergency_manager):
-    """Test position closing retry mechanism"""
-    # Mock trade execution that fails twice then succeeds
-    call_count = 0
-    async def mock_execute_trade(*args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count < 3:
-            raise Exception("Trade failed")
-        return True
-
-    position = {'quantity': 1.0}
-    success = await emergency_manager.close_position_with_retry(
-        'BTC-USD',
-        position,
-        mock_execute_trade
-    )
+async def test_validate_new_position_exceeds_limit(emergency_manager):
+    """Test position validation when exceeding position limits."""
+    # Setup current position
+    emergency_manager.position_limits['BTC-USD'] = Decimal('9.5')
     
-    assert success is True
-    assert call_count == 3  # Should succeed on third try
+    result = await emergency_manager.validate_new_position(
+        'BTC-USD',
+        size=1.0,  # Would exceed max position of 10
+        price=40000.0
+    )
+    assert result is False
+
+@pytest.mark.asyncio
+async def test_validate_new_position_exceeds_risk(emergency_manager):
+    """Test position validation when exceeding risk limits."""
+    result = await emergency_manager.validate_new_position(
+        'BTC-USD',
+        size=2.0,
+        price=30000.0  # Total value 60000 > risk limit 50000
+    )
+    assert result is False
+
+@pytest.mark.asyncio
+async def test_emergency_shutdown(emergency_manager):
+    """Test emergency shutdown procedure."""
+    await emergency_manager.emergency_shutdown()
+    
+    assert emergency_manager.emergency_mode is True
+    assert emergency_manager.position_limits == {}
+    
+    # Verify state persistence
+    with open(emergency_manager.state_file) as f:
+        state = json.load(f)
+        assert state['emergency_mode'] is True
+
+@pytest.mark.asyncio
+async def test_restore_normal_operation(emergency_manager):
+    """Test restoration of normal operation."""
+    emergency_manager.emergency_mode = True
+    result = await emergency_manager.restore_normal_operation()
+    
+    assert result is True
+    assert emergency_manager.emergency_mode is False
+
+def test_update_position_limits(emergency_manager):
+    """Test position limit updates."""
+    new_limits = {
+        'BTC-USD': 5.0,
+        'ETH-USD': 50.0
+    }
+    emergency_manager.update_position_limits(new_limits)
+    
+    assert emergency_manager.position_limits['BTC-USD'] == Decimal('5.0')
+    assert emergency_manager.position_limits['ETH-USD'] == Decimal('50.0')
+
+def test_get_system_health(emergency_manager):
+    """Test system health status retrieval."""
+    emergency_manager.position_limits = {
+        'BTC-USD': Decimal('5.0'),
+        'ETH-USD': Decimal('50.0')
+    }
+    
+    health_status = emergency_manager.get_system_health()
+    
+    assert 'emergency_mode' in health_status
+    assert 'position_limits' in health_status
+    assert isinstance(health_status['position_limits']['BTC-USD'], float)
+
+def test_load_invalid_config(tmp_path):
+    """Test handling of invalid configuration file."""
+    invalid_config = tmp_path / "invalid_config.json"
+    with open(invalid_config, 'w') as f:
+        f.write("invalid json")
+    
+    with pytest.raises(Exception):
+        EmergencyManager(str(invalid_config))
 
 @pytest.mark.asyncio
 async def test_emergency_shutdown_persistence(emergency_manager):
-    """Test emergency state persistence"""
-    mock_file = mock_open()
-    with patch('builtins.open', mock_file):
-        emergency_manager.emergency_shutdown = True
-        emergency_manager.save_state()
-        
-    # Verify file write was called with correct data
-    mock_file.assert_called_once()
-    written_data = mock_file().write.call_args[0][0]
-    state = json.loads(written_data)
-    assert state['emergency_shutdown'] is True
-    assert 'timestamp' in state
+    """Test persistence of emergency state during shutdown."""
+    await emergency_manager.emergency_shutdown()
+    
+    # Create new instance with same state file
+    new_manager = EmergencyManager(
+        emergency_manager.config_path,
+        emergency_manager.state_file
+    )
+    
+    assert new_manager.emergency_mode is True
+    assert new_manager.position_limits == {}
 
 @pytest.mark.asyncio
-async def test_system_health_monitoring(emergency_manager, mock_market_data, mock_websocket):
-    """Test system health monitoring"""
-    # Test initial health status
-    health = emergency_manager.get_system_health()
-    assert health['emergency_mode'] is False
-    assert all(health['system_checks'].values())
+async def test_system_health_monitoring(emergency_manager):
+    """Test system health monitoring during operations."""
+    # Test normal operation
+    health_before = emergency_manager.get_system_health()
+    assert health_before['emergency_mode'] is False
     
-    # Test health degradation
-    mock_websocket.last_message_time = datetime.now() - timedelta(seconds=400)
-    await emergency_manager.check_emergency_conditions(
-        'BTC-USD',
-        50000,
-        mock_market_data,
-        mock_websocket
-    )
+    # Test after emergency
+    await emergency_manager.emergency_shutdown()
+    health_after = emergency_manager.get_system_health()
+    assert health_after['emergency_mode'] is True
     
-    health = emergency_manager.get_system_health()
-    assert health['system_checks']['websocket_health'] is False
+    # Test after restoration
+    await emergency_manager.restore_normal_operation()
+    health_restored = emergency_manager.get_system_health()
+    assert health_restored['emergency_mode'] is False
+
+def test_invalid_position_limits(emergency_manager):
+    """Test handling of invalid position limits."""
+    with pytest.raises(ValueError):
+        emergency_manager.update_position_limits({
+            'BTC-USD': -1.0  # Negative value should raise error
+        })
 
 @pytest.mark.asyncio
-async def test_emergency_shutdown_procedure(emergency_manager, risk_manager):
-    """Test complete emergency shutdown procedure with risk management"""
-    positions = {
-        'BTC-USD': {'quantity': 1.0},
-        'ETH-USD': {'quantity': 5.0}
-    }
+async def test_verify_system_health(emergency_manager):
+    """Test system health verification."""
+    # Test with all necessary data
+    assert await emergency_manager._verify_system_health() is True
     
-    mock_execute_trade = AsyncMock()
-    mock_websocket = AsyncMock()
-    
-    await emergency_manager.initiate_emergency_shutdown(
-        positions,
-        mock_execute_trade,
-        mock_websocket
-    )
-    
-    # Verify shutdown state
-    assert emergency_manager.emergency_shutdown is True
-    assert emergency_manager.shutdown_requested is True
-    
-    # Verify position closing attempts
-    assert mock_execute_trade.call_count == 2  # Should try to close both positions
-    assert mock_websocket.stop.called
-    
-    # Verify risk management blocks new positions
-    risk_manager.set_emergency_mode(True)
-    portfolio_value = 10000
-    assert risk_manager.validate_new_position("BTC-USD", 1000, portfolio_value) is False
-    assert risk_manager.calculate_position_size(portfolio_value, 0.2) == 0.0
-
-@pytest.mark.asyncio
-async def test_websocket_connection_health(emergency_manager, mock_market_data, mock_websocket):
-    """Test WebSocket connection health monitoring"""
-    # Test with fresh connection
-    result = await emergency_manager.check_emergency_conditions(
-        'BTC-USD',
-        50000,
-        mock_market_data,
-        mock_websocket
-    )
-    assert result is False
-    
-    # Test with stale connection
-    mock_websocket.last_message_time = datetime.now() - timedelta(seconds=emergency_manager.max_data_age_seconds + 10)
-    result = await emergency_manager.check_emergency_conditions(
-        'BTC-USD',
-        50000,
-        mock_market_data,
-        mock_websocket
-    )
-    assert result is True
-
-@pytest.mark.asyncio
-async def test_market_data_freshness(emergency_manager, mock_market_data):
-    """Test market data freshness check"""
-    # Test with fresh data
-    result = await emergency_manager.check_emergency_conditions(
-        'BTC-USD',
-        50000,
-        mock_market_data
-    )
-    assert result is False
-    
-    # Test with stale data
-    df = mock_market_data['BTC-USD'].copy()
-    df.index = [
-        datetime.now() - timedelta(seconds=emergency_manager.max_data_age_seconds + i)
-        for i in range(len(df), 0, -1)
-    ]
-    mock_market_data['BTC-USD'] = df
-    
-    result = await emergency_manager.check_emergency_conditions(
-        'BTC-USD',
-        50000,
-        mock_market_data
-    )
-    assert result is True
-
-@pytest.mark.asyncio
-async def test_error_handling(emergency_manager):
-    """Test error handling during emergency checks"""
-    # Test with invalid market data
-    result = await emergency_manager.check_emergency_conditions(
-        'BTC-USD',
-        50000,
-        {'BTC-USD': None}
-    )
-    assert result is True  # Should trigger shutdown on error
-    
-    # Test with missing data
-    result = await emergency_manager.check_emergency_conditions(
-        'BTC-USD',
-        50000,
-        {}
-    )
-    assert result is False  # No data is not an emergency
-
-@pytest.mark.asyncio
-async def test_shutdown_cleanup(emergency_manager):
-    """Test cleanup during emergency shutdown"""
-    positions = {'BTC-USD': {'quantity': 1.0}}
-    mock_execute_trade = AsyncMock(side_effect=Exception("Trade failed"))
-    mock_websocket = AsyncMock()
-    
-    await emergency_manager.initiate_emergency_shutdown(
-        positions,
-        mock_execute_trade,
-        mock_websocket
-    )
-    
-    # Verify shutdown completed despite errors
-    assert emergency_manager.emergency_shutdown is True
-    assert mock_websocket.stop.called  # WebSocket cleanup should still occur
-
-@pytest.mark.asyncio
-async def test_emergency_state_reset(emergency_manager):
-    """Test emergency state reset functionality"""
-    # Set emergency state
-    emergency_manager.emergency_shutdown = True
-    emergency_manager.shutdown_requested = True
-    emergency_manager.system_health_checks['websocket_health'] = False
-    
-    # Reset emergency state
-    emergency_manager.reset_emergency_state()
-    
-    # Verify reset
-    assert emergency_manager.emergency_shutdown is False
-    assert emergency_manager.shutdown_requested is False
-    assert all(emergency_manager.system_health_checks.values())
-
-@pytest.mark.asyncio
-async def test_full_shutdown_sequence(emergency_manager):
-    """Test complete shutdown sequence with all components"""
-    positions = {
-        'BTC-USD': {'quantity': 1.0},
-        'ETH-USD': {'quantity': 2.0}
-    }
-    
-    successful_trades = set()
-    
-    async def mock_execute_trade(pair, **kwargs):
-        successful_trades.add(pair)
-        return True
-    
-    mock_websocket = AsyncMock()
-    
-    # Execute shutdown
-    await emergency_manager.initiate_emergency_shutdown(
-        positions,
-        mock_execute_trade,
-        mock_websocket
-    )
-    
-    # Verify all positions were handled
-    assert successful_trades == {'BTC-USD', 'ETH-USD'}
-    assert mock_websocket.stop.called
-    assert emergency_manager.emergency_shutdown is True
-    
-    # Verify system health status
-    health = emergency_manager.get_system_health()
-    assert health['emergency_mode'] is True
-    assert not health['system_checks']['websocket_health']  # WebSocket should be marked as unhealthy after stop
+    # Test with missing risk limits
+    emergency_manager.risk_limits = {}
+    assert await emergency_manager._verify_system_health() is False

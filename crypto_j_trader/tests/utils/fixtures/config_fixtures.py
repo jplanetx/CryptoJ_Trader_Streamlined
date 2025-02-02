@@ -3,6 +3,7 @@ Test configuration fixtures for CryptoJ Trader tests.
 """
 import pytest
 from typing import Dict, Any
+from crypto_j_trader.tests.utils.mocks.coinbase_mocks import MockExchangeService # Import MockExchangeService
 
 @pytest.fixture
 def test_config() -> Dict[str, Any]:
@@ -73,3 +74,8 @@ def test_env_config() -> Dict[str, Any]:
             'use_sandbox': True
         }
     }
+
+@pytest.fixture
+def mock_exchange_service():
+    """Basic mock for exchange service."""
+    return MockExchangeService() # Return MockExchangeService instance

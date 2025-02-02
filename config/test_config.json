@@ -1,0 +1,28 @@
+{
+    "max_positions": {
+        "BTC-USD": 50000,
+        "ETH-USD": 25000
+    },
+    "risk_limits": {
+        "BTC-USD": 50000,
+        "ETH-USD": 25000
+    },
+    "emergency_thresholds": {
+        "max_latency": 1000,
+        "market_data_max_age": 60,
+        "min_available_funds": 1000.0,
+        "BTC-USD": 100000,
+        "ETH-USD": 50000
+    },
+    "trading": {
+        "max_position_size": 100000,
+        "min_order_size": 10.0
+    },
+    "monitoring": {
+        "health_check_interval": 60,
+        "state_save_interval": 300
+    },
+    "position_limit": 50000,
+    "state_file": "test_emergency_state.json",
+    "risk_factor": 0.02
+}

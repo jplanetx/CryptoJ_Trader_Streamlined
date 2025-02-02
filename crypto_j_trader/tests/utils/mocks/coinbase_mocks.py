@@ -4,6 +4,7 @@ Mock responses and utilities for Coinbase Advanced API testing.
 from typing import Dict, Any, List
 import json
 from datetime import datetime, timezone
+import unittest.mock
 
 class MockCoinbaseResponses:
     """Collection of mock Coinbase API responses for testing."""
@@ -198,3 +199,11 @@ def mock_insufficient_funds_error() -> Dict[str, Any]:
         "INSUFFICIENT_FUNDS",
         "Insufficient funds for requested transaction."
     )
+
+class MockExchangeService(unittest.mock.Mock): # Creating MockExchangeService class
+    """Mock implementation of ExchangeService for testing."""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.get_historical_data = unittest.mock.AsyncMock(return_value={})
+        self.get_current_price = unittest.mock.AsyncMock(return_value={})
+        self.start_price_feed = unittest.mock.AsyncMock() # Mock for websocket

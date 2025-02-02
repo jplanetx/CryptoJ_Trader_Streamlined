@@ -13,5 +13,9 @@
         "order_type": "limit",
         "position_type": "spot",
         "timeout": 30000
+    },
+    "websocket": {
+        "endpoint": "wss://stream.binance.com:9443/ws",
+        "subscriptions": ["!ticker@arr"]
     }
 }
