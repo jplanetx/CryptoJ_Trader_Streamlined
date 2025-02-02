@@ -7,7 +7,13 @@ import logging
 from abc import ABC, abstractmethod
 from decimal import Decimal
 from typing import Dict, Optional
-from coinbase.rest import RESTClient
+
+from .exchange_service import (
+    ExchangeService,
+    MarketOrder,
+    LimitOrder,
+    ExchangeServiceError
+)
 
 # Configure logging
 logger = logging.getLogger('order_execution')
@@ -30,23 +36,23 @@ class OrderExecution(ABC):
         pass
 
 class OrderExecutor(OrderExecution):
-    def __init__(self, exchange_client: Optional[RESTClient], trading_pair: str, paper_trading: bool = False):
+    def __init__(self, exchange_service: Optional[ExchangeService], trading_pair: Optional[str] = None, paper_trading: bool = False):
         """
-        Initialize the OrderExecutor with the exchange client and trading pair.
+        Initialize the OrderExecutor with the exchange service and trading pair.
 
         Args:
-            exchange_client: Coinbase API client instance (can be None in paper trading mode)
-            trading_pair: Trading pair symbol (e.g., 'BTC-USD')
+            exchange_service: Exchange service instance (can be None in paper trading mode)
+            trading_pair: Trading pair symbol (e.g., 'BTC-USD'), can be None for multi-pair trading
             paper_trading: Flag to enable paper trading mode
         """
-        self.exchange = exchange_client
+        self.exchange = exchange_service
         self.trading_pair = trading_pair
         self.paper_trading = paper_trading
         self.positions = {}  # Tracks current positions, keys are trading pairs; values are dicts with 'quantity' and 'entry_price'
         self.default_fill_price = Decimal("50000.0")  # Used for market orders in paper trading if no price is provided
         if self.exchange is None and not self.paper_trading:
-            raise ValueError("Exchange client cannot be None in live trading mode")
-        logger.info(f"OrderExecutor initialized for {trading_pair} in {'PAPER TRADING' if paper_trading else 'LIVE'} mode")
+            raise ValueError("Exchange service cannot be None in live trading mode")
+        logger.info(f"OrderExecutor initialized in {'PAPER TRADING' if paper_trading else 'LIVE'} mode")
 
     def execute_order(self, order: Dict) -> Dict:
         """
@@ -63,8 +69,14 @@ class OrderExecutor(OrderExecution):
         size = Decimal(str(order.get('quantity', 0)))
         order_type = order.get('type', 'market').lower()
         limit_price = Decimal(str(order.get('price'))) if order.get('price') else None
+        
+        # Get trading pair from order, fallback to default
+        trading_pair = order.get('symbol', self.trading_pair)
+        if not trading_pair:
+            raise ValueError("Trading pair must be specified in order or constructor")
+
         try:
-            logger.info(f"Executing {side} order: {size} {self.trading_pair}")
+            logger.info(f"Executing {side} order: {size} {trading_pair}")
 
             # Basic input validation
             if side not in ['buy', 'sell']:
@@ -75,43 +87,59 @@ class OrderExecutor(OrderExecution):
                 raise ValueError("Limit price required for limit orders")
 
             if self.paper_trading:
-                # Simulate order execution in paper trading mode.
-                # For market orders, use default_fill_price; for limit orders, use the provided limit_price.
+                # Simulate order execution in paper trading mode
                 fill_price = self.default_fill_price if order_type == 'market' else limit_price
-                order = {
-                    'id': 'paper_trade',
-                    'product_id': self.trading_pair,
+                order_result = {
+                    'order_id': 'paper_trade',
+                    'product_id': trading_pair,
                     'side': side,
                     'type': order_type,
                     'size': str(size),
                     'price': str(fill_price),
                     'status': 'filled'
                 }
-                logger.info(f"Paper trade executed successfully: {order['id']}")
-                self._update_position(side, size, fill_price)
-                return order
+                logger.info(f"Paper trade executed successfully: {order_result['order_id']}")
+                self._update_position(trading_pair, side, size, fill_price)
+                return order_result
 
-            # For live trading, ensure exchange client is available
+            # For live trading, ensure exchange service is available
             if self.exchange is None:
-                raise ValueError("Exchange client not initialized")
+                raise ValueError("Exchange service not initialized")
 
-            # Prepare order parameters
-            order_params = {
-                'product_id': self.trading_pair,
-                'side': side,
-                'type': order_type,
-                'size': str(size)
-            }
-            if order_type == 'limit':
-                order_params['price'] = str(limit_price)
+            try:
+                # Execute order through the exchange service
+                if order_type == 'market':
+                    market_order = MarketOrder(
+                        product_id=trading_pair,
+                        side=side,
+                        size=size
+                    )
+                    response = self.exchange.place_market_order(market_order)
+                else:  # limit order
+                    limit_order = LimitOrder(
+                        product_id=trading_pair,
+                        side=side,
+                        size=size,
+                        price=limit_price
+                    )
+                    response = self.exchange.place_limit_order(limit_order)
 
-            # Execute order through the exchange
-            response = self.exchange.place_order(**order_params)
-            # Attempt to extract the executed price from the response; fallback to default_fill_price if not present
-            executed_price = Decimal(response.get('price', str(self.default_fill_price)))
-            logger.info(f"Order executed successfully: {response.get('id', 'unknown')}")
-            self._update_position(side, size, executed_price)
-            return response
+                # Get the order details to confirm execution
+                order_details = self.exchange.get_order_status(response['order_id'])
+                
+                # Extract executed price from order details or use ticker price as fallback
+                executed_price = Decimal(order_details.get('price', str(self.default_fill_price)))
+                if not executed_price:
+                    ticker = self.exchange.get_product_ticker(trading_pair)
+                    executed_price = Decimal(ticker.get('price', str(self.default_fill_price)))
+
+                logger.info(f"Order executed successfully: {response.get('order_id', 'unknown')}")
+                self._update_position(trading_pair, side, size, executed_price)
+                return order_details
+
+            except ExchangeServiceError as e:
+                logger.error(f"Exchange service error: {str(e)}")
+                raise
 
         except Exception as e:
             logger.error(f"Order execution failed: {str(e)}")
@@ -131,7 +159,15 @@ class OrderExecutor(OrderExecution):
         Returns:
             Dict containing order details
         """
-        return self.execute_order(side, quantity, order_type, price)
+        order = {
+            'symbol': symbol,
+            'side': side,
+            'quantity': quantity,
+            'type': order_type
+        }
+        if price is not None:
+            order['price'] = price
+        return self.execute_order(order)
 
     def get_position(self, symbol: str) -> Optional[Dict]:
         """
@@ -151,33 +187,34 @@ class OrderExecutor(OrderExecution):
         self.positions[symbol] = {'quantity': quantity, 'entry_price': entry_price}
         logger.info(f"Initialized position for {symbol}: {quantity} @ {entry_price}")
 
-    def _update_position(self, side: str, size: Decimal, price: Decimal):
+    def _update_position(self, symbol: str, side: str, size: Decimal, price: Decimal):
         """
         Updates the position tracking based on the trade.
 
         Args:
+            symbol: The trading pair symbol
             side: 'buy' or 'sell'
             size: The size of the trade
-            price: The price at which the trade was executed.
+            price: The price at which the trade was executed
         """
         if side == 'buy':
             # Initialize the position if it doesn't exist
-            if self.trading_pair not in self.positions:
-                self.positions[self.trading_pair] = {'quantity': size, 'entry_price': price}
+            if symbol not in self.positions:
+                self.positions[symbol] = {'quantity': size, 'entry_price': price}
             else:
-                current_position = self.positions[self.trading_pair]
+                current_position = self.positions[symbol]
                 new_quantity = current_position['quantity'] + size
                 # Calculate the new weighted average entry price
                 new_entry_price = ((current_position['quantity'] * current_position['entry_price']) + (size * price)) / new_quantity
-                self.positions[self.trading_pair] = {'quantity': new_quantity, 'entry_price': new_entry_price}
+                self.positions[symbol] = {'quantity': new_quantity, 'entry_price': new_entry_price}
         elif side == 'sell':
-            if self.trading_pair not in self.positions:
-                raise ValueError("No position exists")
-            current_position = self.positions[self.trading_pair]
+            if symbol not in self.positions:
+                raise ValueError(f"No position exists for {symbol}")
+            current_position = self.positions[symbol]
             if size > current_position['quantity']:
-                raise ValueError("Insufficient position size")
+                raise ValueError(f"Insufficient position size for {symbol}")
             new_quantity = current_position['quantity'] - size
             if new_quantity == 0:
-                del self.positions[self.trading_pair]
+                del self.positions[symbol]
             else:
-                self.positions[self.trading_pair]['quantity'] = new_quantity
+                self.positions[symbol]['quantity'] = new_quantity
