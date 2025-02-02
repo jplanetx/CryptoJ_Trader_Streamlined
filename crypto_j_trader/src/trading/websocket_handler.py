@@ -236,6 +236,7 @@ class WebSocketHandler:
             try:
                 await asyncio.sleep(self.ping_interval)
                 
+                if not self.websocket: continue
                 if self.is_connected:
                     # Check last message time
                     time_since_last = (datetime.utcnow() - self.last_message_time).total_seconds()
