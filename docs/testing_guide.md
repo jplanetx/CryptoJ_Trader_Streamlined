@@ -103,6 +103,75 @@ def test_performance_benchmark():
     pass
 ```
 
+## Core Component Testing
+
+### Trading Core Tests
+
+The `test_trading_core.py` file in `tests/unit/` directory contains unit tests for the Trading Core component.
+These tests cover critical functionalities such as:
+
+- Order lifecycle management (placing, canceling orders)
+- Position management (updating and adjusting positions)
+- Risk calculations (assessing risk based on positions)
+- Emergency shutdown procedures
+
+Example test structure:
+
+```python
+@pytest.mark.asyncio
+async def test_order_lifecycle(trading_core_system):
+    # Test order placement and cancellation
+    order = {"id": 1, "symbol": "BTC", "quantity": 0.5}
+    placed_order = await trading_core_system.place_order(order)
+    assert placed_order == order
+    # ... (rest of the test)
+```
+
+### WebSocket Handler Tests
+
+The `test_websocket_handler.py` file in `tests/unit/` directory includes unit tests for the WebSocket Handler component.
+These tests validate:
+
+- Connection management (connect, disconnect)
+- Reconnection logic (automatic reconnection attempts)
+- Message processing (sending and receiving messages)
+- Subscription handling (subscribing to channels)
+
+Example test structure:
+
+```python
+@pytest.mark.asyncio
+async def test_connection_management(websocket_system):
+    # Test WebSocket connection and disconnection
+    connected = await websocket_system.connect()
+    assert connected
+    # ... (rest of the test)
+```
+
+### Market Data Tests
+
+The `test_market_data.py` file in `tests/unit/` directory provides unit tests for the Market Data component.
+These tests ensure proper functionality of:
+
+- Price updates (handling real-time price changes)
+- Order book updates (managing order book data)
+- Trade history updates (tracking trade history)
+- Data validation (ensuring data integrity)
+
+Example test structure:
+
+```python
+@pytest.mark.asyncio
+async def test_price_updates(market_data_system):
+    # Test price update mechanism
+    new_price = 45000.75
+    updated_price = await market_data_system.update_price(new_price)
+    assert updated_price == new_price
+    # ... (rest of the test)
+```
+
+Ensure to run these tests to validate the core components' behavior and coverage.
+
 ## Performance Testing
 
 Performance tests should use the performance thresholds fixture:

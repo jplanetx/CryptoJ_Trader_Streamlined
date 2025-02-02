@@ -9,20 +9,17 @@ class RiskManager:
     Handles risk assessment, position validation, and order validation.
     """
     
-    def __init__(self, risk_threshold: float, market_data=None):
-        self.risk_threshold = Decimal(str(risk_threshold))
-        self.market_data = market_data
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+        self.market_data = None
         self.trading_core = None
         self.emergency_mode = False
         self._risk_thresholds = {
             "volatility": Decimal("0.15"),     # 15% volatility threshold
-            "exposure": self.risk_threshold / Decimal("100"),  # Convert from percentage
+            "exposure": Decimal("0.25"),       # 25% max exposure
             "liquidity": Decimal("0.10")       # 10% of available liquidity
         }
         self.logger = logging.getLogger(__name__)
-        
-        if market_data:
-            self.market_data = market_data
 
     async def validate_paper_trading(self) -> Tuple[bool, str]:
         """Validate paper trading system readiness"""
@@ -35,12 +32,12 @@ class RiskManager:
 
             # Check data freshness
             last_update = await self.market_data.get_last_update_time()
-            if (datetime.now() - last_update).seconds > 60:  # 60 second staleness threshold
+            if (datetime.now() - last_update).seconds > self.config.get('max_data_age', 60):
                 return False, "Market data is stale"
 
             # Check order book depth
             order_book = await self.market_data.get_order_book("BTC-USD")
-            if len(order_book.get('bids', [])) < 10:  # Minimum depth of 10
+            if len(order_book.get('bids', [])) < self.config.get('min_order_book_depth', 10):
                 return False, "Insufficient order book depth"
 
             return True, "Paper trading validation successful"
@@ -90,14 +87,9 @@ class RiskManager:
                 return False, "Position size limit exceeded"
 
             # Check liquidity
-            order_book = await self.market_data.get_order_book(order['symbol'])
-            if order['side'] == 'buy':
-                available_liquidity = sum(size for price, size in order_book.get('asks', []))
-            else:
-                available_liquidity = sum(size for price, size in order_book.get('bids', []))
-
-            if Decimal(str(order['size'])) > Decimal(str(available_liquidity)) * self._risk_thresholds["liquidity"]:
-                return False, "Order size exceeds safe liquidity threshold"
+            value = Decimal(str(order['size'])) * Decimal(str(order['price']))
+            if value > Decimal(str(self.config.get('max_order_value', 1000))):
+                return False, f"Order value {float(value):.2f} exceeds maximum {float(self.config['max_order_value']):.2f}"
 
             # Risk assessment
             if not await self.assess_risk(order['price'], order['symbol']):
@@ -132,35 +124,3 @@ class RiskManager:
         squared_diff_sum = sum((r - mean_return) ** 2 for r in returns)
         
         return (squared_diff_sum / (len(returns) - 1)).sqrt()
-
-    async def validate_new_position(self, position_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Validate new position against risk limits"""
-        validation = {
-            "valid": True,
-            "errors": []
-        }
-        
-        try:
-            # Check emergency mode
-            if self.emergency_mode:
-                validation["valid"] = False
-                validation["errors"].append("System in emergency mode")
-                return validation
-            
-            # Check position size
-            if abs(Decimal(str(position_data['size']))) > self.config.get('max_position_size', Decimal("1.0")):
-                validation["valid"] = False
-                validation["errors"].append("Position size exceeds maximum limit")
-            
-            # Check market data availability
-            if not self.market_data:
-                validation["valid"] = False
-                validation["errors"].append("Market data not available")
-                return validation
-            
-            return validation
-            
-        except Exception as e:
-            validation["valid"] = False
-            validation["errors"].append(f"Validation error: {str(e)}")
-            return validation
