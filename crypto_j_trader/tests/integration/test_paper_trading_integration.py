@@ -5,7 +5,7 @@ from decimal import Decimal
 from crypto_j_trader.src.trading.paper_trading import PaperTrader
 from crypto_j_trader.src.trading.order_execution import OrderExecutor
 from crypto_j_trader.src.trading.exchange_service import ExchangeService
-from crypto_j_trader.src.trading.market_data import MarketDataHandler
+from crypto_j_trader.src.trading.market_data_handler import MarketDataHandler
 
 class MockMarketData(MarketDataHandler):
     """Mock market data handler for testing"""
@@ -202,7 +202,7 @@ def test_multi_asset_trading(multi_asset_trading_system):
         exchange.set_trading_pair(order["symbol"])
         result = trader.place_order(order)
         assert result["status"] == "filled"
-        assert result["product_id"] == order["symbol"], f"Expected {order['symbol']}, got {result['product_id']}"
+        assert result["product_id"] == order["symbol"]
     
     # Verify positions for both assets
     assert trader.positions["BTC-USD"] == Decimal("1.0")

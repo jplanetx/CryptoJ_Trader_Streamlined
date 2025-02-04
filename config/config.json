@@ -1,7 +1,5 @@
 {
     "trading_pair": "BTC-USD",
-    "api_key": "",
-    "api_secret": "",
     "risk": {
         "max_position_size": 0.01,
         "stop_loss_percentage": 2.0,

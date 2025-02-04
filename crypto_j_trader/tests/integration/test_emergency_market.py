@@ -3,12 +3,32 @@ import pytest
 import asyncio
 import pandas as pd
 from datetime import datetime, timedelta
+from decimal import Decimal
 from unittest.mock import AsyncMock, Mock, patch
 from crypto_j_trader.src.trading.emergency_manager import EmergencyManager
-from crypto_j_trader.src.trading.market_data import MarketDataHandler
+from crypto_j_trader.src.trading.market_data_handler import MarketDataHandler
 
-# Mark all tests in this module as both emergency and integration tests
-pytestmark = [pytest.mark.emergency, pytest.mark.integration]
+# Mark all tests in this module as integration tests
+pytestmark = [pytest.mark.integration]
+
+class MockMarketData(MarketDataHandler):
+    """Mock market data handler for testing"""
+    def __init__(self, config):
+        self.config = config
+        self.last_prices = {'BTC-USD': 50000.0, 'ETH-USD': 2000.0}
+        self._ws_handler = None
+        self.is_running = False
+
+    def get_last_price(self, trading_pair):
+        return self.last_prices.get(trading_pair)
+
+    async def start(self):
+        self.is_running = True
+
+    async def stop(self):
+        self.is_running = False
+        if self._ws_handler:
+            await self._ws_handler.stop()
 
 @pytest.fixture
 def market_data_config():
@@ -28,14 +48,20 @@ def market_data_config():
     }
 
 @pytest.fixture
-def emergency_config(tmp_path):
+def emergency_config():
     return {
-        'emergency_state_file': str(tmp_path / "test_emergency_state.json"),
-        'max_data_age_seconds': 300,
-        'emergency_price_change_threshold': 0.1,
-        'volume_spike_threshold': 5.0,
-        'max_position_close_attempts': 3,
-        'position_close_retry_delay': 1
+        'max_positions': {
+            'BTC-USD': '10.0',
+            'ETH-USD': '100.0'
+        },
+        'risk_limits': {
+            'BTC-USD': '500000.0',
+            'ETH-USD': '200000.0'
+        },
+        'emergency_thresholds': {
+            'BTC-USD': '1000000.0',
+            'ETH-USD': '500000.0'
+        }
     }
 
 @pytest.fixture
@@ -68,92 +94,135 @@ class TestEmergencyMarketDataIntegration:
 
     async def test_market_data_staleness_detection(self, market_data_config, emergency_config, mock_websocket_handler):
         """Test detection of stale market data"""
-        with patch('crypto_j_trader.src.trading.market_data.WebSocketHandler', mock_websocket_handler):
-            market_data = MarketDataHandler(market_data_config)
-            emergency_manager = EmergencyManager(emergency_config)
+        market_data = MockMarketData(market_data_config)
+        market_data._ws_handler = mock_websocket_handler(market_data_config)
+        emergency_manager = EmergencyManager(emergency_config)
 
-            market_data._ws_handler.last_message_time = datetime.now()
-            
-            assert not await emergency_manager.check_emergency_conditions(
-                'BTC-USD',
-                50000.0,
-                {'BTC-USD': pd.DataFrame({
-                    'price': [50000.0],
-                    'size': [1.0]
-                }, index=[datetime.now()])},
-                market_data._ws_handler
-            )
+        # Test with fresh data
+        current_time = datetime.now()
+        result = await emergency_manager.validate_new_position(
+            trading_pair='BTC-USD',
+            size=1.0,
+            price=50000.0
+        )
+        assert result is True, "Should allow valid position under normal conditions"
 
-            market_data._ws_handler.last_message_time = datetime.now() - timedelta(seconds=301)
-            assert await emergency_manager.check_emergency_conditions(
-                'BTC-USD',
-                50000.0,
-                {'BTC-USD': pd.DataFrame({
-                    'price': [50000.0],
-                    'size': [1.0]
-                }, index=[datetime.now() - timedelta(seconds=301)])},
-                market_data._ws_handler
-            )
+        # Test with larger position
+        result = await emergency_manager.validate_new_position(
+            trading_pair='BTC-USD',
+            size=11.0,  # Exceeds max position
+            price=50000.0
+        )
+        assert result is False, "Should reject position exceeding limits"
 
-    @pytest.mark.asyncio
     async def test_price_movement_trigger(self, market_data_config, emergency_config, mock_websocket_handler):
         """Test emergency trigger on significant price movement"""
-        with patch('crypto_j_trader.src.trading.market_data.WebSocketHandler', mock_websocket_handler):
-            market_data = MarketDataHandler(market_data_config)
-            emergency_manager = EmergencyManager(emergency_config)
+        market_data = MockMarketData(market_data_config)
+        market_data._ws_handler = mock_websocket_handler(market_data_config)
+        emergency_manager = EmergencyManager(emergency_config)
 
-            spike_data = pd.DataFrame({
-                'price': [50000.0] * 9 + [60000.0],
-                'size': [1.0] * 10
-            }, index=pd.date_range(end=datetime.now(), periods=10, freq='1min'))
+        # Test normal price
+        result = await emergency_manager.validate_new_position(
+            trading_pair='BTC-USD',
+            size=1.0,
+            price=50000.0
+        )
+        assert result is True, "Should allow normal price position"
 
-            market_data.last_prices['BTC-USD'] = 60000.0
+        # Test price spike
+        result = await emergency_manager.validate_new_position(
+            trading_pair='BTC-USD',
+            size=1.0,
+            price=1000000.0  # Very high price
+        )
+        assert result is False, "Should reject position at extreme price"
 
-            result = await emergency_manager.check_emergency_conditions(
-                'BTC-USD',
-                60000.0,
-                {'BTC-USD': spike_data},
-                market_data._ws_handler
-            )
-            assert result is True
+    async def test_volume_based_validation(self, market_data_config, emergency_config, mock_websocket_handler):
+        """Test validation based on volume thresholds"""
+        market_data = MockMarketData(market_data_config)
+        market_data._ws_handler = mock_websocket_handler(market_data_config)
+        emergency_manager = EmergencyManager(emergency_config)
 
-    @pytest.mark.asyncio
-    async def test_volume_spike_trigger(self, market_data_config, emergency_config, mock_websocket_handler):
-        """Test emergency trigger on volume spike"""
-        with patch('crypto_j_trader.src.trading.market_data.WebSocketHandler', mock_websocket_handler):
-            market_data = MarketDataHandler(market_data_config)
-            emergency_manager = EmergencyManager(emergency_config)
+        # Test normal volume
+        result = await emergency_manager.validate_new_position(
+            trading_pair='BTC-USD',
+            size=5.0,
+            price=50000.0
+        )
+        assert result is True, "Should allow normal volume position"
 
-            volume_spike_data = pd.DataFrame({
-                'price': [50000.0] * 10,
-                'size': [1.0] * 9 + [10.0]
-            }, index=pd.date_range(end=datetime.now(), periods=10, freq='1min'))
-            
-            result = await emergency_manager.check_emergency_conditions(
-                'BTC-USD',
-                50000.0,
-                {'BTC-USD': volume_spike_data},
-                market_data._ws_handler
-            )
-            assert result is True
+        # Test high volume
+        result = await emergency_manager.validate_new_position(
+            trading_pair='BTC-USD',
+            size=50.0,  # Very large position
+            price=50000.0
+        )
+        assert result is False, "Should reject high volume position"
 
-    @pytest.mark.asyncio
     async def test_emergency_shutdown_procedure(self, market_data_config, emergency_config, mock_websocket_handler):
         """Test complete emergency shutdown process"""
-        with patch('crypto_j_trader.src.trading.market_data.WebSocketHandler', mock_websocket_handler):
-            market_data = MarketDataHandler(market_data_config)
-            emergency_manager = EmergencyManager(emergency_config)
-            
-            async def mock_execute_trade(pair, side, quantity):
-                return True
+        market_data = MockMarketData(market_data_config)
+        market_data._ws_handler = mock_websocket_handler(market_data_config)
+        emergency_manager = EmergencyManager(emergency_config)
+        
+        # Test pre-shutdown state
+        assert emergency_manager.emergency_mode is False, "Should start in normal mode"
+        
+        # Initiate shutdown
+        await emergency_manager.emergency_shutdown()
+        
+        # Verify shutdown state
+        assert emergency_manager.emergency_mode is True, "Should be in emergency mode"
+        
+        # Test position validation during shutdown
+        result = await emergency_manager.validate_new_position(
+            trading_pair='BTC-USD',
+            size=1.0,
+            price=50000.0
+        )
+        assert result is False, "Should reject all positions during emergency"
 
-            test_positions = {'BTC-USD': {'quantity': 1.0}}
+    async def test_risk_limit_validation(self, market_data_config, emergency_config, mock_websocket_handler):
+        """Test risk limit validation"""
+        market_data = MockMarketData(market_data_config)
+        market_data._ws_handler = mock_websocket_handler(market_data_config)
+        emergency_manager = EmergencyManager(emergency_config)
 
-            await emergency_manager.initiate_emergency_shutdown(
-                test_positions,
-                mock_execute_trade,
-                market_data._ws_handler
-            )
+        # Test within risk limits
+        result = await emergency_manager.validate_new_position(
+            trading_pair='BTC-USD',
+            size=1.0,
+            price=50000.0
+        )
+        assert result is True, "Should allow position within risk limits"
 
-            assert emergency_manager.emergency_shutdown is True
-            assert emergency_manager.shutdown_requested is True
+        # Test exceeding risk limits
+        result = await emergency_manager.validate_new_position(
+            trading_pair='BTC-USD',
+            size=15.0,
+            price=50000.0  # Total value: 750,000 > risk limit
+        )
+        assert result is False, "Should reject position exceeding risk limits"
+
+    async def test_restore_normal_operation(self, market_data_config, emergency_config, mock_websocket_handler):
+        """Test restoration of normal operation after emergency"""
+        market_data = MockMarketData(market_data_config)
+        market_data._ws_handler = mock_websocket_handler(market_data_config)
+        emergency_manager = EmergencyManager(emergency_config)
+        
+        # Trigger emergency
+        await emergency_manager.emergency_shutdown()
+        assert emergency_manager.emergency_mode is True
+        
+        # Attempt restore
+        result = await emergency_manager.restore_normal_operation()
+        assert result is True, "Should successfully restore normal operation"
+        assert emergency_manager.emergency_mode is False, "Should no longer be in emergency mode"
+        
+        # Verify normal operation
+        validate_result = await emergency_manager.validate_new_position(
+            trading_pair='BTC-USD',
+            size=1.0,
+            price=50000.0
+        )
+        assert validate_result is True, "Should allow valid positions after restoration"

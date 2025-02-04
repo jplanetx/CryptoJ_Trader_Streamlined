@@ -41,7 +41,7 @@ python scripts/install_deps.py
 ```bash
 cp config/example.json config/local.json
 cp .env.example .env
-# Edit local.json and .env with your settings
+# Edit .env with your API key and secret
 ```
 
 ## 3. Paper Trading Guidelines
@@ -135,7 +135,7 @@ python -m crypto_j_trader.src.utils.monitoring --report
    - Proper security measures
 
 2. Configuration Verification:
-   - API keys properly set
+   - API keys properly set as environment variables
    - Risk parameters configured
    - Monitoring systems active
    - Alert thresholds defined
