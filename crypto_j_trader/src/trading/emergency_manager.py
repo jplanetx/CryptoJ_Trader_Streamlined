@@ -154,7 +154,6 @@ class EmergencyManager:
             self.position_limits = {
                 pair: Decimal('0') for pair in self.max_positions.keys()
             }
-            self.emergency_mode = False # Reset emergency mode
             if self.state_file.exists():
                 with open(self.state_file) as f:
                     state = json.load(f)
