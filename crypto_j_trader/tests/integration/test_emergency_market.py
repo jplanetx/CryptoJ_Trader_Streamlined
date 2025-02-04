@@ -12,9 +12,9 @@ from crypto_j_trader.src.trading.market_data_handler import MarketDataHandler
 pytestmark = [pytest.mark.integration]
 
 @pytest.fixture
-async def reset_emergency_manager():
+def reset_emergency_manager():
     """Fixture to reset emergency manager for a given instance."""
-    async def _reset(emergency_manager):
+    def _reset(emergency_manager):
         emergency_manager.emergency_mode = False
     return _reset
 
@@ -104,8 +104,7 @@ class TestEmergencyMarketDataIntegration:
         market_data = MockMarketData(market_data_config)
         market_data._ws_handler = mock_websocket_handler(market_data_config)
         emergency_manager = EmergencyManager(emergency_config)
-        reset = await reset_emergency_manager()
-        await reset(emergency_manager)
+        reset_emergency_manager(emergency_manager)
 
         # Test with fresh data
         result = await emergency_manager.validate_new_position(
@@ -128,8 +127,7 @@ class TestEmergencyMarketDataIntegration:
         market_data = MockMarketData(market_data_config)
         market_data._ws_handler = mock_websocket_handler(market_data_config)
         emergency_manager = EmergencyManager(emergency_config)
-        reset = await reset_emergency_manager()
-        await reset(emergency_manager)
+        reset_emergency_manager(emergency_manager)
 
         # Test normal price scenario
         result = await emergency_manager.validate_new_position(
@@ -152,8 +150,7 @@ class TestEmergencyMarketDataIntegration:
         market_data = MockMarketData(market_data_config)
         market_data._ws_handler = mock_websocket_handler(market_data_config)
         emergency_manager = EmergencyManager(emergency_config)
-        reset = await reset_emergency_manager()
-        await reset(emergency_manager)
+        reset_emergency_manager(emergency_manager)
 
         # Test with a normal volume position
         result = await emergency_manager.validate_new_position(
@@ -199,8 +196,7 @@ class TestEmergencyMarketDataIntegration:
         market_data = MockMarketData(market_data_config)
         market_data._ws_handler = mock_websocket_handler(market_data_config)
         emergency_manager = EmergencyManager(emergency_config)
-        reset = await reset_emergency_manager()
-        await reset(emergency_manager)
+        reset_emergency_manager(emergency_manager)
 
         # Test a position within defined risk limits
         result = await emergency_manager.validate_new_position(
