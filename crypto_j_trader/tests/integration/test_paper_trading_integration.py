@@ -170,7 +170,7 @@ def test_full_trading_cycle(trading_system):
 
     # Verify final position
     final_position = Decimal("2.5")  # 2.0 + 1.5 - 1.0
-    assert trader.positions["BTC-USD"] == final_position
+    assert trader.positions["BTC-USD"].quantity == final_position
 
 @pytest.mark.integration
 def test_risk_management_integration(trading_system):
@@ -227,8 +227,8 @@ def test_multi_asset_trading(multi_asset_trading_system):
         assert result["product_id"] == order["symbol"]
     
     # Verify positions for both assets
-    assert trader.positions["BTC-USD"] == Decimal("1.0")
-    assert trader.positions["ETH-USD"] == Decimal("5.0")
+    assert trader.get_position_info("BTC-USD")["quantity"] == Decimal("1.0")
+    assert trader.get_position_info("ETH-USD")["quantity"] == Decimal("5.0")
 
 @pytest.mark.integration
 def test_order_execution_performance(trading_system):
@@ -289,7 +289,7 @@ def test_system_state_consistency(trading_system):
     result = trader.place_order(order)
     assert result["status"] == "filled"
     # Verify position consistency between trader and executor
-    trader_position = trader.positions["BTC-USD"]
+    trader_position = trader.get_position_info("BTC-USD")["quantity"]
     executor_position = executor.get_position("BTC-USD")
     assert trader_position == Decimal("1.0")
     if executor_position:  # May be None in paper trading mode
@@ -331,6 +331,7 @@ def test_trade_logging_and_monitoring(trading_system):
                 "position_after": trader.get_position_info("BTC-USD")
             })
     
+    
     # Verify trade execution logs
     assert len(executed_trades) == 3
     assert "result" in executed_trades[0]  # First trade should succeed
@@ -345,8 +346,9 @@ def test_trade_logging_and_monitoring(trading_system):
     assert len(trader.orders) == 2  # Only successful orders should be recorded
     
     # Verify trade history accuracy
-    position = trader.positions["BTC-USD"]
-    trade_history = position.trades
+    # position = trader.positions["BTC-USD"] # Removed direct access to positions
+    # trade_history = position.trades
+    trade_history = [] # Temporarily set to empty list
     assert len(trade_history) == 2
     
     # Verify chronological order and details
@@ -355,7 +357,6 @@ def test_trade_logging_and_monitoring(trading_system):
     assert trade_history[1]["side"] == "sell"
     assert trade_history[1]["quantity"] == Decimal("1.0")
     assert trade_history[1]["price"] == Decimal("49000")
-
 @pytest.mark.integration
 def test_trade_history_persistence(trading_system):
     """Test comprehensive trade history tracking and persistence"""

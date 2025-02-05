@@ -115,9 +115,9 @@ class TradingBot:
             if position['size'] > 0:
                 position['stop_loss'] = position['entry_price'] * (1 - stop_loss_pct)
             elif position['size'] < 0:
-                 position['stop_loss'] = position['entry_price'] * (1 + stop_loss_pct)
+                position['stop_loss'] = position['entry_price'] * (1 + stop_loss_pct)
             else:
-              position['stop_loss'] = 0
+                position['stop_loss'] = 0.0
 
             # Update daily stats
             self.daily_stats['trades'] += 1
@@ -214,24 +214,38 @@ class TradingBot:
                 else (position['entry_price'] - price) * abs(position['size'])
             )
 
+        if self.market_data_handler:
+            await self.market_data_handler.update_price(symbol)
+
         await self.check_positions()
 
     async def emergency_shutdown(self):
         """Execute emergency shutdown procedure."""
         logger.warning("Initiating emergency shutdown")
-        self.shutdown_requested = True
         
         # Close all positions
-        for symbol, position in list(self.positions.items()):
-            if position['size'] != 0:
-                current_price = self.market_prices.get(symbol, position['entry_price'])
+        for symbol in list(self.positions.keys()):
+            if symbol in self.positions and self.positions[symbol]['size'] != 0:
+                current_price = self.market_prices.get(symbol, self.positions[symbol]['entry_price'])
                 await self.execute_order(
-                    'sell' if position['size'] > 0 else 'buy',
-                    abs(position['size']),
+                    'sell' if self.positions[symbol]['size'] > 0 else 'buy',
+                    abs(self.positions[symbol]['size']),
                     current_price,
                     symbol
                 )
-        
+                del self.positions[symbol]
+        self.shutdown_requested = True
+        self.is_healthy = False
+        return {'status': 'success'}
+    async def check_health(self) -> Dict[str, Any]:
+        current_price = self.market_prices.get(symbol, position['entry_price'])
+        await self.execute_order(
+            'sell' if position['size'] > 0 else 'buy',
+            abs(position['size']),
+            current_price,
+            symbol
+        )
+    
         self.is_healthy = False
         return {'status': 'success'}
 
