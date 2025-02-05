@@ -1,5 +1,5 @@
 import pytest
-from crypto_j_trader.src.trading.trading_core import TradingBot
+from crypto_j_trader.src.trading.trading_core import TradingCore
 
 @pytest.fixture
 def config():

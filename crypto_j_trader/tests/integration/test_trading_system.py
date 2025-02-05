@@ -3,7 +3,7 @@ import pytest
 import pytest_asyncio
 import asyncio
 from datetime import datetime, timezone
-from crypto_j_trader.src.trading.trading_core import TradingBot
+from crypto_j_trader.src.trading.trading_core import TradingCore
 from crypto_j_trader.src.trading.health_monitor import HealthMonitor
 from crypto_j_trader.src.trading.position_manager import PositionManager
 
