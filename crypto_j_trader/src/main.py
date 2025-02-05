@@ -8,8 +8,11 @@ import logging
 import json
 from typing import Dict
 from coinbase.rest import RESTClient
-from trading.trading_core import TradingCore
+# from trading.trading_core import TradingCore # Removed TradingCore
 from trading.risk_management import RiskManager
+from trading.paper_trading import PaperTrader
+from trading.order_executor import OrderExecutor
+from trading.market_data_handler import MarketDataHandler
 
 # Configure logging
 logging.basicConfig(
@@ -27,8 +30,11 @@ class TradingBot:
         """Initialize minimal trading bot"""
         self.config = self._load_config(config_path)
         self.client = self._setup_client()
-        self.trading_core = TradingCore(self.client, self.config['trading_pair'])
+        # self.trading_core = TradingCore(self.client, self.config['trading_pair']) # Removed TradingCore
         self.risk_manager = RiskManager(self.config['risk'])
+        self.market_data_handler = MarketDataHandler(self.client, self.config['trading_pair'])
+        self.order_executor = OrderExecutor(self.client)
+        self.paper_trader = PaperTrader(self.order_executor, self.market_data_handler)
 
         logger.info(f"Trading bot initialized for {self.config['trading_pair']}")
 
@@ -79,12 +85,21 @@ class TradingBot:
             logger.info("Starting trading bot")
 
             # Basic health check
-            if not self.trading_core.check_health():
-                raise SystemError("Health check failed")
+            # if not self.trading_core.check_health(): # Removed TradingCore
+            #    raise SystemError("Health check failed")
 
             # Get current position
-            position = self.trading_core.get_position()
-            logger.info(f"Current position: {position}")
+            # position = self.trading_core.get_position() # Removed TradingCore
+            # logger.info(f"Current position: {position}")
+
+            # Example order (replace with strategy logic)
+            order = {
+                "symbol": self.config['trading_pair'],
+                "side": "buy",
+                "quantity": 0.001,
+                "type": "market"
+            }
+            self.paper_trader.place_order(order)
 
             logger.info("Trading bot ready for operation")
 

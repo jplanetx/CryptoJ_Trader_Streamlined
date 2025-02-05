@@ -5,9 +5,9 @@
         "stop_loss_percentage": 2.0,
         "max_daily_trades": 10
     },
-    "initial_capital": 10000,
+    "initial_capital": 230,
     "target_capital": 20000,
-    "days_target": 30,
+    "days_target": 90,
     "paper_trading": true,
     "trading_pairs": [
         {"pair": "BTC-USD"}

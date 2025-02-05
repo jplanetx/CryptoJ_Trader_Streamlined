@@ -1296,5 +1296,133 @@
     "position_size": "1.5",
     "cost_basis": "75000.0",
     "realized_pnl": "0"
+  },
+  {
+    "timestamp": "2025-02-05T18:27:15.194079",
+    "symbol": "BTC-USD",
+    "side": "buy",
+    "quantity": "2.0",
+    "price": "50000.0",
+    "type": "market"
+  },
+  {
+    "timestamp": "2025-02-05T18:27:15.212077",
+    "symbol": "BTC-USD",
+    "side": "buy",
+    "quantity": "1.5",
+    "price": "49000",
+    "type": "limit"
+  },
+  {
+    "timestamp": "2025-02-05T18:27:15.327328",
+    "symbol": "BTC-USD",
+    "side": "buy",
+    "quantity": "1.0",
+    "price": "50000.0",
+    "type": "market"
+  },
+  {
+    "timestamp": "2025-02-05T18:27:15.349328",
+    "symbol": "ETH-USD",
+    "side": "buy",
+    "quantity": "5.0",
+    "price": "50000.0",
+    "type": "market"
+  },
+  {
+    "timestamp": "2025-02-05T18:27:15.383865",
+    "symbol": "BTC-USD",
+    "side": "buy",
+    "quantity": "0.1",
+    "price": "50000.0",
+    "type": "market"
+  },
+  {
+    "timestamp": "2025-02-05T18:27:15.411851",
+    "symbol": "BTC-USD",
+    "side": "buy",
+    "quantity": "0.1",
+    "price": "50000.0",
+    "type": "market"
+  },
+  {
+    "timestamp": "2025-02-05T18:27:15.439852",
+    "symbol": "BTC-USD",
+    "side": "buy",
+    "quantity": "0.1",
+    "price": "50000.0",
+    "type": "market"
+  },
+  {
+    "timestamp": "2025-02-05T18:27:15.461967",
+    "symbol": "BTC-USD",
+    "side": "buy",
+    "quantity": "0.1",
+    "price": "50000.0",
+    "type": "market"
+  },
+  {
+    "timestamp": "2025-02-05T18:27:15.483488",
+    "symbol": "BTC-USD",
+    "side": "buy",
+    "quantity": "0.1",
+    "price": "50000.0",
+    "type": "market"
+  },
+  {
+    "timestamp": "2025-02-05T18:27:15.518488",
+    "symbol": "BTC-USD",
+    "side": "buy",
+    "quantity": "0.1",
+    "price": "50000.0",
+    "type": "market"
+  },
+  {
+    "timestamp": "2025-02-05T18:27:15.562497",
+    "symbol": "BTC-USD",
+    "side": "buy",
+    "quantity": "1.0",
+    "price": "50000.0",
+    "type": "market"
+  },
+  {
+    "timestamp": "2025-02-05T18:27:15.614772",
+    "symbol": "BTC-USD",
+    "side": "buy",
+    "quantity": "3.0",
+    "price": "50000.0",
+    "type": "market"
+  },
+  {
+    "timestamp": "2025-02-05T18:27:15.674335",
+    "symbol": "BTC-USD",
+    "side": "buy",
+    "quantity": "1.0",
+    "price": "50000.0",
+    "type": "market"
+  },
+  {
+    "timestamp": "2025-02-05T18:27:15.695334",
+    "symbol": "ETH-USD",
+    "side": "buy",
+    "quantity": "10.0",
+    "price": "2000",
+    "type": "limit"
+  },
+  {
+    "timestamp": "2025-02-05T18:27:15.731333",
+    "symbol": "BTC-USD",
+    "side": "buy",
+    "quantity": "2.0",
+    "price": "50000.0",
+    "type": "market"
+  },
+  {
+    "timestamp": "2025-02-05T18:27:15.787884",
+    "symbol": "BTC-USD",
+    "side": "buy",
+    "quantity": "0.01",
+    "price": "50000.0",
+    "type": "market"
   }
 ]

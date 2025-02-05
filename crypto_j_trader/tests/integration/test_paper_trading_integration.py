@@ -1,4 +1,6 @@
 """Integration tests for paper trading system"""
+from crypto_j_trader.src.trading.paper_trading import Position
+
 
 import pytest
 from decimal import Decimal

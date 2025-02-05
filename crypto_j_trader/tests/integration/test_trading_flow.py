@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch
-from crypto_j_trader.src.trading.trading_core import TradingCore
+from crypto_j_trader.src.trading.trading_core import TradingBot
 
 @pytest.fixture
 def trading_bot():

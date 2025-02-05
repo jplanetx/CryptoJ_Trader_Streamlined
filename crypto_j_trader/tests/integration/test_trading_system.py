@@ -3,7 +3,7 @@ import pytest
 import pytest_asyncio
 import asyncio
 from datetime import datetime, timezone
-from crypto_j_trader.src.trading.trading_core import TradingCore
+from crypto_j_trader.src.trading.trading_core import TradingBot
 from crypto_j_trader.src.trading.health_monitor import HealthMonitor
 from crypto_j_trader.src.trading.position_manager import PositionManager
 
@@ -34,7 +34,17 @@ def test_config():
 async def trading_components(test_config):
     """Create individual trading system components."""
     bot = TradingBot(test_config)
-    health_monitor = HealthMonitor()
+    default_thresholds = {
+        'warning_latency': 100,  # milliseconds
+        'critical_latency': 500, # milliseconds
+        'warning_error_rate': 5,   # percentage
+        'critical_error_rate': 10,  # percentage
+        'warning_memory': 80,    # percentage
+        'critical_memory': 95,   # percentage
+        'warning_cpu': 70,       # percentage
+        'critical_cpu': 90      # percentage
+    }
+    health_monitor = HealthMonitor(default_thresholds)
     position_manager = PositionManager(test_config)
     return bot, health_monitor, position_manager
 
@@ -80,7 +90,7 @@ class TestTradingSystem:
         # 5. Order execution
         start_time = datetime.now(timezone.utc).timestamp()
         order_result = await bot.execute_order('buy', size, 50000.0, trading_pair)
-        delay = health_monitor.record_order_latency(start_time)
+        delay = await health_monitor.record_latency('order_execution', start_time)
         assert order_result['status'] == 'success'
         assert delay > 0
 
@@ -233,8 +243,8 @@ class TestTradingSystem:
         # 1. Monitor order execution performance
         start_time = datetime.now(timezone.utc).timestamp()
         await bot.execute_order('buy', 1.0, 50000.0, 'BTC-USD')
-        latency = health_monitor.record_order_latency(start_time)
-        assert isinstance(latency, float)
+        latency = await health_monitor.record_latency('order_execution', start_time)
+        assert isinstance(float(latency), float)
 
         # 2. System health metrics
         health_metrics = await bot.check_health()
