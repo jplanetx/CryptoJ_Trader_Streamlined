@@ -238,3 +238,16 @@ class TestMarketDataService:  # Renamed test class
         await market_data_service.stop()
         assert market_data_service._running == False
         assert market_data_service._websocket_task is None
+        
+    @pytest.mark.asyncio
+    async def test_subscribe_price_updates_without_exchange(self):
+        """Test error handling when exchange service is not initialized"""
+        market_data_service = MarketDataService()
+        symbols = ["BTC-USD"]
+        
+        # Attempt to subscribe without setting exchange_service
+        await market_data_service.subscribe_price_updates(symbols)
+        
+        # Verify service is not running
+        assert market_data_service._running == False
+        assert market_data_service.exchange_service is None
