@@ -206,4 +206,14 @@ class MockExchangeService(unittest.mock.Mock): # Creating MockExchangeService cl
         super().__init__(*args, **kwargs)
         self.get_historical_data = unittest.mock.AsyncMock(return_value={})
         self.get_current_price = unittest.mock.AsyncMock(return_value={})
-        self.start_price_feed = unittest.mock.AsyncMock() # Mock for websocket
+        self.start_price_feed = unittest.mock.AsyncMock()
+        self.place_market_order = unittest.mock.AsyncMock(return_value={
+            'status': 'success',
+            'order_id': 'mock-order-id',
+            'executed_price': 50000.0
+        })
+        self.place_limit_order = unittest.mock.AsyncMock(return_value={
+            'status': 'success',
+            'order_id': 'mock-order-id',
+            'executed_price': 50000.0
+        })

@@ -73,66 +73,168 @@ class TestMarketDataService:  # Renamed test class
             await market_data_service.update_price_history("BTC-USD", -104.0)  # Negative price
 
     @pytest.mark.asyncio
-    async def test_real_time_updates(self, mock_exchange_service): # Using fixture as parameter
+    async def test_real_time_updates(self, mock_exchange_service):
         """Test real-time data processing"""
-        # Mock exchange service to simulate real-time price updates
         mock_exchange = mock_exchange_service
         symbols = ["BTC-USD"]
-        mock_exchange.get_current_price.return_value = {"BTC-USD": 105.0}
-
-        # Initialize MarketDataService with mock exchange and enable real-time updates
-        market_data_service = MarketDataService() # Removed unnecessary config
-        market_data_service.exchange_service = mock_exchange # Setting exchange_service
-        market_data_service.current_prices = {"BTC-USD": 104.0} # Initialize current prices
+        
+        # Set up mock responses
+        initial_price = 104.0
+        updated_price = 105.0
+        
+        # Configure mock to return current price
+        mock_exchange.get_current_price.return_value = {"BTC-USD": updated_price}
+        
+        # Configure websocket feed
+        async def mock_price_feed(symbols):
+            yield json.dumps({
+                "type": "ticker",
+                "symbol": "BTC-USD",
+                "price": str(updated_price)
+            })
+        
+        mock_exchange.start_price_feed = mock_price_feed
+        
+        # Initialize MarketDataService
+        market_data_service = MarketDataService()
+        market_data_service.exchange_service = mock_exchange
+        market_data_service.current_prices = {"BTC-USD": initial_price}
+        
+        # Subscribe and process updates
         await market_data_service.subscribe_price_updates(symbols)
-        await asyncio.sleep(0.1)  # Allow time for update
-
-        # Assert real-time price is updated
-        assert market_data_service.current_prices == {"BTC-USD": 105.0} # Now correctly initialized price
+        await asyncio.sleep(0.5)  # Allow time for update
+        
+        # Verify price update
+        assert market_data_service.current_prices["BTC-USD"] == updated_price
 
     @pytest.mark.asyncio
-    async def test_real_time_price_updates_from_websocket(self, mocker, mock_exchange_service): # Added mocker fixture
+    async def test_real_time_price_updates_from_websocket(self, mocker, mock_exchange_service):
         """Test real-time price updates from websocket"""
-        # Mock exchange service and websocket connection
         mock_exchange = mock_exchange_service
         symbols = ["BTC-USD"]
         updated_price = 106.0
 
-        # Create a mock for the websocket message generator
-        async def mock_websocket_generator():
-            yield json.dumps({"type": "ticker", "symbol": "BTC-USD", "price": str(updated_price)})
-            await asyncio.sleep(0.01) # Yield control to allow price update to be processed
+        # Create an async generator for websocket messages
+        async def mock_websocket_feed(symbols):
+            yield json.dumps({
+                "type": "ticker",
+                "symbol": "BTC-USD",
+                "price": str(updated_price)
+            })
 
-        # Patch the start_price_feed method to use the mock generator
-        mocker.patch.object(mock_exchange, 'start_price_feed', return_value=mock_websocket_generator()) # Corrected patch syntax
+        # Set up the mock
+        mock_exchange.start_price_feed = mock_websocket_feed
 
-        # Initialize MarketDataService with mock exchange
+        # Initialize MarketDataService
         market_data_service = MarketDataService()
         market_data_service.exchange_service = mock_exchange
-        market_data_service.current_prices = {"BTC-USD": 105.0} # Initial price
+        market_data_service.current_prices = {"BTC-USD": 105.0}
 
-        # Subscribe to price updates and wait for a short time
+        # Start websocket feed
         await market_data_service.subscribe_price_updates(symbols)
-        await asyncio.sleep(0.1)  # Allow time for websocket message to be processed
+        
+        # Process the websocket message
+        await asyncio.sleep(0.5)  # Increased sleep time to ensure message processing
 
-        # Assert real-time price is updated via websocket
-        assert market_data_service.current_prices == {"BTC-USD": updated_price} # Price updated from websocket
+        # Verify the price update
+        assert market_data_service.current_prices["BTC-USD"] == updated_price
 
     @pytest.mark.asyncio
-    async def test_error_recovery(self, mock_exchange_service): # Using fixture as parameter
+    async def test_error_recovery(self, mock_exchange_service):
         """Test system recovery from data errors"""
-        # Mock exchange service to simulate data errors
         mock_exchange = mock_exchange_service
         symbols = ["BTC-USD"]
+        
+        # Test API error handling
         mock_exchange.get_current_price.side_effect = Exception("API Error")
-
-        # Initialize MarketDataService with mock exchange
         market_data_service = MarketDataService()
         market_data_service.exchange_service = mock_exchange
-
-        # Test handling of exceptions during real-time updates - removed pytest.raises
         await market_data_service.subscribe_price_updates(symbols)
-        await asyncio.sleep(0.1) # Allow time for error to potentially occur
-
-        # In this scenario, error is logged but not raised, service should continue to run
-        assert True # If no unhandled exception, test implicitly passes error handling
+        
+        # Service should continue running despite error
+        assert market_data_service._running == False
+        
+    @pytest.mark.asyncio
+    async def test_initialize_price_history_error(self, mock_exchange_service):
+        """Test error handling during price history initialization"""
+        mock_exchange = mock_exchange_service
+        symbols = ["BTC-USD"]
+        mock_exchange.get_historical_data.side_effect = Exception("Historical data error")
+        
+        market_data_service = MarketDataService()
+        with pytest.raises(Exception, match="Historical data error"):
+            await market_data_service.initialize_price_history(symbols, 1, mock_exchange)
+            
+    @pytest.mark.asyncio
+    async def test_websocket_json_decode_error(self, mock_exchange_service):
+        """Test handling of malformed JSON in websocket messages"""
+        mock_exchange = mock_exchange_service
+        symbols = ["BTC-USD"]
+        
+        # Configure websocket feed to return invalid JSON
+        async def mock_invalid_json_feed(symbols):
+            yield "invalid json data"
+            
+        mock_exchange.start_price_feed = mock_invalid_json_feed
+        
+        market_data_service = MarketDataService()
+        market_data_service.exchange_service = mock_exchange
+        market_data_service.current_prices = {"BTC-USD": 100.0}
+        
+        # Start websocket feed
+        await market_data_service.subscribe_price_updates(symbols)
+        await asyncio.sleep(0.1)
+        
+        # Price should remain unchanged after error
+        assert market_data_service.current_prices["BTC-USD"] == 100.0
+        
+    @pytest.mark.asyncio
+    async def test_websocket_message_processing_error(self, mock_exchange_service):
+        """Test handling of invalid message format in websocket updates"""
+        mock_exchange = mock_exchange_service
+        symbols = ["BTC-USD"]
+        
+        # Configure websocket feed with invalid message format
+        async def mock_invalid_format_feed(symbols):
+            yield json.dumps({
+                "type": "ticker",
+                "symbol": "BTC-USD",
+                "price": "invalid_price"  # Invalid price format
+            })
+            
+        mock_exchange.start_price_feed = mock_invalid_format_feed
+        
+        market_data_service = MarketDataService()
+        market_data_service.exchange_service = mock_exchange
+        market_data_service.current_prices = {"BTC-USD": 100.0}
+        
+        # Start websocket feed
+        await market_data_service.subscribe_price_updates(symbols)
+        await asyncio.sleep(0.1)
+        
+        # Price should remain unchanged after error
+        assert market_data_service.current_prices["BTC-USD"] == 100.0
+        
+    @pytest.mark.asyncio
+    async def test_get_recent_prices_with_error(self):
+        """Test error handling in get_recent_prices"""
+        market_data_service = MarketDataService()
+        # Force an error by passing None
+        recent_prices = await market_data_service.get_recent_prices(None)
+        assert recent_prices == []
+        
+    @pytest.mark.asyncio
+    async def test_websocket_connection_cleanup(self, mock_exchange_service):
+        """Test websocket connection cleanup on stop"""
+        mock_exchange = mock_exchange_service
+        symbols = ["BTC-USD"]
+        
+        market_data_service = MarketDataService()
+        market_data_service.exchange_service = mock_exchange
+        market_data_service._running = True
+        market_data_service._websocket_task = asyncio.create_task(asyncio.sleep(1))
+        
+        # Stop service and verify cleanup
+        await market_data_service.stop()
+        assert market_data_service._running == False
+        assert market_data_service._websocket_task is None

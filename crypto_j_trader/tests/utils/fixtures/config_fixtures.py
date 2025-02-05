@@ -20,14 +20,17 @@ def test_config() -> Dict[str, Any]:
             'max_daily_loss': 5000.0,
             'stop_loss_pct': 0.05,
             'take_profit_pct': 0.1,
-            'max_leverage': 3.0
+            'max_leverage': 3.0,
+            'risk_threshold': 0.1  # Default risk threshold for tests
         },
         'paper_trading': True,
         'api': {
             'rate_limit_per_second': 5,
             'max_retries': 3,
             'retry_delay': 1.0
-        }
+        },
+        'api_key': 'test_api_key',  # Dummy API key for tests
+        'api_secret': 'test_api_secret'  # Dummy API secret for tests
     }
 
 @pytest.fixture

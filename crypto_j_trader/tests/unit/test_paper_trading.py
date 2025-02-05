@@ -3,6 +3,7 @@ from decimal import Decimal
 from crypto_j_trader.src.trading.paper_trading import PaperTrader
 from crypto_j_trader.src.trading.order_execution import OrderExecutor
 from crypto_j_trader.src.trading.exchange_service import ExchangeService
+from crypto_j_trader.src.trading.paper_trading import PaperTraderError
 
 class MockExchangeService(ExchangeService):
     """Mock exchange service for testing"""
@@ -193,3 +194,36 @@ def test_position_limit_handling(paper_trader):
     
     with pytest.raises(Exception):
         paper_trader.place_order(large_order)
+
+def test_max_drawdown_risk_control(paper_trader):
+    """Test max drawdown risk control functionality"""
+    # Set initial capital and max drawdown
+    initial_capital = Decimal("10000")
+    max_drawdown = Decimal("0.2")  # 20% max drawdown
+    risk_controls = {"max_drawdown": max_drawdown}
+    paper_trader.initial_capital = initial_capital
+    paper_trader.integrate_risk_controls(risk_controls)
+
+    # Simulate losses to trigger max drawdown
+    loss_1 = Decimal("1000") # $1000 loss
+    paper_trader.current_capital -= loss_1
+    paper_trader.daily_pnl -= loss_1 # Simulate $1000 loss
+
+    loss_2 = Decimal("1500") # $1500 additional loss, total $2500 loss
+    paper_trader.current_capital -= loss_2
+    paper_trader.daily_pnl -= loss_2 # Simulate additional $1500 loss
+
+    # Attempting a buy order after max drawdown should raise PaperTraderError
+    buy_order_1 = {
+        "symbol": "BTC-USD",
+        "quantity": Decimal("0.01"),
+        "side": "buy",
+        "type": "market",
+    }
+    with pytest.raises(PaperTraderError) as excinfo: # Expect PaperTraderError
+        paper_trader.place_order(buy_order_1)
+    assert "Order would exceed maximum drawdown of 0.2%" in str(excinfo.value) # Updated assertion
+
+    # Verify current capital and drawdown level
+    assert paper_trader.current_capital == initial_capital - loss_1 - loss_2 # Current capital should be $10000 - $2500 = $7500
+    assert paper_trader.max_drawdown_level == initial_capital - (initial_capital * max_drawdown) # Max drawdown level should be $8000

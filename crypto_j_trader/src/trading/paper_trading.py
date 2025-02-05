@@ -27,6 +27,10 @@ class PaperTrader:
         self.positions = {}
         self.orders = []
         self.risk_controls = None
+        self.initial_capital = Decimal("10000")  # Default initial capital
+        self.current_capital = Decimal("10000")  # Start with initial capital
+        self.daily_pnl = Decimal("0")  # Track daily P&L
+        self.max_drawdown_level = self._calculate_max_drawdown_level() # Initialize max_drawdown_level
 
     def place_order(self, order: Dict) -> Dict:
         """
@@ -67,11 +71,29 @@ class PaperTrader:
         # Update position based on execution result
         if result["status"] == "filled":
             quantity = Decimal(str(order["quantity"]))
+            price = Decimal(str(order.get("price", "0"))) # Default to 0 if price is missing
+            if order["side"].lower() == "buy":
+                self.current_capital -= quantity * price
+            elif order["side"].lower() == "sell":
+                self.current_capital += quantity * price
+            self._update_daily_pnl(order)
+            
             if order["side"].lower() == "sell":
-                quantity = -quantity
+                quantity = -quantity # Make quantity negative for sell orders
             self.update_position(order["symbol"], quantity)
         
         return result
+
+    def _update_daily_pnl(self, order: Dict) -> None:
+        """
+        Updates daily P&L based on filled order.
+        """
+        quantity = Decimal(str(order["quantity"]))
+        price = Decimal(str(order.get("price", "0"))) # Default to 0 if price is missing
+        if order["side"].lower() == "buy":
+            self.daily_pnl -= quantity * price  # Cost of purchase
+        elif order["side"].lower() == "sell":
+            self.daily_pnl += quantity * price  # Revenue from sale
 
     def update_position(self, symbol: str, quantity: Decimal) -> Decimal:
         """
@@ -101,8 +123,15 @@ class PaperTrader:
         """
         Set or update risk control measures for paper trading.
         
-        Parameters:
-            risk_data (dict): Risk control parameters (e.g., max_position_size, max_drawdown)
+        Also updates the max_drawdown_level based on the new risk_data.
+        """
+        self.risk_controls = risk_data
+        self._update_risk_control_decimals(risk_data) # Convert risk control values to Decimal
+        self.max_drawdown_level = self._calculate_max_drawdown_level() # Update max_drawdown_level
+
+    def _update_risk_control_decimals(self, risk_data: Dict) -> None:
+        """
+        Convert risk control values to Decimal.
         """
         if "max_position_size" in risk_data:
             risk_data["max_position_size"] = Decimal(str(risk_data["max_position_size"]))
@@ -110,8 +139,14 @@ class PaperTrader:
             risk_data["max_drawdown"] = Decimal(str(risk_data["max_drawdown"]))
         if "daily_loss_limit" in risk_data:
             risk_data["daily_loss_limit"] = Decimal(str(risk_data["daily_loss_limit"]))
-            
-        self.risk_controls = risk_data
+        
+
+    def _calculate_max_drawdown_level(self) -> Decimal:
+        """
+        Calculate the maximum drawdown level based on initial capital and max_drawdown percentage.
+        """
+        max_drawdown_percent = self.risk_controls.get("max_drawdown", Decimal("0")) if self.risk_controls else Decimal("0")
+        return self.initial_capital - (self.initial_capital * max_drawdown_percent)
 
     def get_position(self, symbol: str) -> Optional[Decimal]:
         """
@@ -173,3 +208,21 @@ class PaperTrader:
             if order["side"].lower() == "buy":
                 if current_position + quantity > max_size:
                     raise PaperTraderError(f"Order would exceed maximum position size of {max_size}")
+
+        # Check max drawdown
+        if "max_drawdown" in self.risk_controls:
+            max_drawdown_percent = self.risk_controls["max_drawdown"]
+            drawdown_value = self.initial_capital - self.current_capital
+            max_drawdown_value = self.initial_capital * (max_drawdown_percent / 100)
+            if drawdown_value > max_drawdown_value: # Changed to only check drawdown_value, not potential order impact
+                raise PaperTraderError(
+                    f"Order would exceed maximum drawdown of {max_drawdown_percent}%"
+                )
+        
+        # Check daily loss limit
+        if "daily_loss_limit" in self.risk_controls:
+            daily_loss_limit = self.risk_controls["daily_loss_limit"]
+            if self.daily_pnl < -daily_loss_limit: # Changed to only check daily_pnl, not potential order impact
+                raise PaperTraderError(
+                    f"Order would exceed daily loss limit of {daily_loss_limit}"
+                )

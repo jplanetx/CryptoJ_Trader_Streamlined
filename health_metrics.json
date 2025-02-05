@@ -1,0 +1,65 @@
+{
+  "status_history": [
+    {
+      "timestamp": "2025-02-05T03:05:52.134351",
+      "status": "error",
+      "metrics": {
+        "latency": 0.0,
+        "error_rate": 0.0,
+        "memory_usage": 49.8,
+        "cpu_usage": 26.4
+      }
+    },
+    {
+      "timestamp": "2025-02-05T03:05:53.174214",
+      "status": "error",
+      "metrics": {
+        "latency": 0.0,
+        "error_rate": 0.0,
+        "memory_usage": 50.1,
+        "cpu_usage": 25.4
+      }
+    },
+    {
+      "timestamp": "2025-02-05T03:08:06.325139",
+      "status": "error",
+      "metrics": {
+        "latency": 0.0,
+        "error_rate": 0.0,
+        "memory_usage": 62.8,
+        "cpu_usage": 30.5
+      }
+    },
+    {
+      "timestamp": "2025-02-05T03:08:07.371173",
+      "status": "error",
+      "metrics": {
+        "latency": 0.0,
+        "error_rate": 0.0,
+        "memory_usage": 62.3,
+        "cpu_usage": 22.7
+      }
+    },
+    {
+      "timestamp": "2025-02-05T03:08:30.477662",
+      "status": "error",
+      "metrics": {
+        "latency": 0.0,
+        "error_rate": 0.0,
+        "memory_usage": 64.0,
+        "cpu_usage": 28.2
+      }
+    },
+    {
+      "timestamp": "2025-02-05T03:08:31.541246",
+      "status": "error",
+      "metrics": {
+        "latency": 0.0,
+        "error_rate": 0.0,
+        "memory_usage": 63.9,
+        "cpu_usage": 24.4
+      }
+    }
+  ],
+  "last_updated": "2025-02-05T03:08:32.549972"
+}
