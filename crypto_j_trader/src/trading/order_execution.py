@@ -23,7 +23,7 @@ class OrderExecution(ABC):
     Abstract base class defining the interface for order execution.
     """
     @abstractmethod
-    def execute_order(self, order: Dict) -> Dict:
+    async def execute_order(self, order: Dict) -> Dict:
         """
         Execute a trading order.
         
@@ -47,6 +47,8 @@ class OrderExecutor(OrderExecution):
         """
         self.exchange = exchange_service
         self.trading_pair = trading_pair
+        if not trading_pair:
+            raise ValueError("Trading pair must be specified in the constructor")
         self.paper_trading = paper_trading
         self.positions = {}  # Tracks current positions, keys are trading pairs; values are dicts with 'quantity' and 'entry_price'
         self.default_fill_price = Decimal("50000.0")  # Used for market orders in paper trading if no price is provided
@@ -54,7 +56,7 @@ class OrderExecutor(OrderExecution):
             raise ValueError("Exchange service cannot be None in live trading mode")
         logger.info(f"OrderExecutor initialized in {'PAPER TRADING' if paper_trading else 'LIVE'} mode")
 
-    def execute_order(self, order: Dict) -> Dict:
+    async def execute_order(self, order: Dict) -> Dict:
         """
         Execute a trading order.
         
@@ -64,27 +66,37 @@ class OrderExecutor(OrderExecution):
         Returns:
             Dict: Order execution result
         """
-        # Extract order details
-        side = order.get('side', '').lower()
-        size = Decimal(str(order.get('quantity', 0)))
-        order_type = order.get('type', 'market').lower()
-        limit_price = Decimal(str(order.get('price'))) if order.get('price') else None
-        
-        # Get trading pair from order, fallback to default
-        trading_pair = order.get('symbol', self.trading_pair)
-        if not trading_pair:
-            raise ValueError("Trading pair must be specified in order or constructor")
-
         try:
-            logger.info(f"Executing {side} order: {size} {trading_pair}")
+            # Extract order details
+            side = order.get('side', '').lower()
+            quantity_str = order.get('quantity', '0')
+            order_type = order.get('type', 'market').lower()
+            price_str = order.get('price')
+            
+            # Get trading pair from order, fallback to default
+            trading_pair = order.get('symbol', self.trading_pair)
 
             # Basic input validation
             if side not in ['buy', 'sell']:
                 raise ValueError(f"Invalid order side: {side}")
             if order_type not in ['market', 'limit']:
                 raise ValueError(f"Invalid order type: {order_type}")
-            if order_type == 'limit' and limit_price is None:
+            if order_type == 'limit' and price_str is None:
                 raise ValueError("Limit price required for limit orders")
+
+            try:
+                size = Decimal(str(quantity_str))
+            except Exception:
+                raise ValueError(f"Invalid literal for Decimal: {quantity_str}")
+
+            limit_price = None
+            if price_str:
+                try:
+                    limit_price = Decimal(str(price_str))
+                except:
+                    raise ValueError(f"Invalid literal for Decimal: {price_str}")
+
+            logger.info(f"Executing {side} order: {size} {trading_pair}")
 
             if self.paper_trading:
                 # Simulate order execution in paper trading mode
@@ -114,7 +126,7 @@ class OrderExecutor(OrderExecution):
                         side=side,
                         size=size
                     )
-                    response = self.exchange.place_market_order(market_order)
+                    response = await self.exchange.place_market_order(market_order)
                 else:  # limit order
                     limit_order = LimitOrder(
                         product_id=trading_pair,
@@ -122,16 +134,22 @@ class OrderExecutor(OrderExecution):
                         size=size,
                         price=limit_price
                     )
-                    response = self.exchange.place_limit_order(limit_order)
+                    response = await self.exchange.place_limit_order(limit_order)
 
                 # Get the order details to confirm execution
-                order_details = self.exchange.get_order_status(response['order_id'])
+                order_details = await self.exchange.get_order_status(response['order_id'])
                 
                 # Extract executed price from order details or use ticker price as fallback
-                executed_price = Decimal(order_details.get('price', str(self.default_fill_price)))
+                executed_price = None
+                if order_details.get('price'):
+                    executed_price = Decimal(str(order_details['price']))
+                
                 if not executed_price:
-                    ticker = self.exchange.get_product_ticker(trading_pair)
-                    executed_price = Decimal(ticker.get('price', str(self.default_fill_price)))
+                    ticker = await self.exchange.get_product_ticker(trading_pair)
+                    if ticker.get('price'):
+                        executed_price = Decimal(str(ticker['price']))
+                    else:
+                        executed_price = self.default_fill_price
 
                 logger.info(f"Order executed successfully: {response.get('order_id', 'unknown')}")
                 self._update_position(trading_pair, side, size, executed_price)
@@ -145,7 +163,7 @@ class OrderExecutor(OrderExecution):
             logger.error(f"Order execution failed: {str(e)}")
             raise
 
-    def create_order(self, symbol: str, side: str, quantity: Decimal, price: Optional[Decimal] = None, order_type: str = 'market') -> Dict:
+    async def create_order(self, symbol: str, side: str, quantity: Decimal, price: Optional[Decimal] = None, order_type: str = 'market') -> Dict:
         """
         A wrapper method to execute_order, providing a more user-friendly interface.
 
@@ -167,7 +185,7 @@ class OrderExecutor(OrderExecution):
         }
         if price is not None:
             order['price'] = price
-        return self.execute_order(order)
+        return await self.execute_order(order)
 
     def get_position(self, symbol: str) -> Optional[Dict]:
         """

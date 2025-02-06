@@ -200,13 +200,16 @@ def mock_insufficient_funds_error() -> Dict[str, Any]:
         "Insufficient funds for requested transaction."
     )
 
-class MockExchangeService(unittest.mock.Mock): # Creating MockExchangeService class
+class MockExchangeService(unittest.mock.Mock):
     """Mock implementation of ExchangeService for testing."""
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # Mock async methods
         self.get_historical_data = unittest.mock.AsyncMock(return_value={})
         self.get_current_price = unittest.mock.AsyncMock(return_value={})
         self.start_price_feed = unittest.mock.AsyncMock()
+        
+        # Mock order-related methods
         self.place_market_order = unittest.mock.AsyncMock(return_value={
             'status': 'success',
             'order_id': 'mock-order-id',
@@ -217,3 +220,13 @@ class MockExchangeService(unittest.mock.Mock): # Creating MockExchangeService cl
             'order_id': 'mock-order-id',
             'executed_price': 50000.0
         })
+        self.get_order_status = unittest.mock.AsyncMock(return_value={
+            'status': 'success',
+            'order_id': 'mock-order-id',
+            'price': '50000.0'
+        })
+        self.get_product_ticker = unittest.mock.AsyncMock(return_value={
+            'price': '50000.0',
+            'product_id': 'BTC-USD'
+        })
+        self.cancel_order = unittest.mock.AsyncMock(return_value={'success': True})
