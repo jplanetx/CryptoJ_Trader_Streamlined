@@ -148,3 +148,37 @@ def test_reset_emergency_state(emergency_manager):
     assert emergency_manager.emergency_mode is False
     health = emergency_manager.get_system_health()
     assert len(health["position_limits"]) == 0
+
+@pytest.mark.asyncio
+async def test_trigger_emergency_shutdown(emergency_manager):
+    """Test triggering emergency shutdown based on thresholds."""
+    # Simulate conditions that trigger emergency shutdown
+    emergency_manager.position_limits["BTC-USD"] = Decimal('60000')
+    await emergency_manager.validate_new_position("BTC-USD", 1.0, 50000.0)
+    
+    # Verify emergency mode is triggered
+    assert emergency_manager.emergency_mode is True
+
+@pytest.mark.asyncio
+async def test_close_positions(emergency_manager):
+    """Test closing positions during emergency."""
+    # Simulate open positions
+    emergency_manager.position_limits["BTC-USD"] = Decimal('60000')
+    
+    # Close positions
+    await emergency_manager.close_positions()
+    
+    # Verify positions are closed
+    assert emergency_manager.position_limits["BTC-USD"] == Decimal('0')
+
+@pytest.mark.asyncio
+async def test_system_state_management(emergency_manager):
+    """Test system state management during emergency and recovery."""
+    # Simulate emergency state
+    await emergency_manager.emergency_shutdown()
+    assert emergency_manager.emergency_mode is True
+    
+    # Restore normal operation
+    success = await emergency_manager.restore_normal_operation()
+    assert success is True
+    assert emergency_manager.emergency_mode is False
