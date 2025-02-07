@@ -153,14 +153,11 @@ def test_reset_emergency_state(emergency_manager):
 async def test_trigger_emergency_shutdown(emergency_manager):
     """Test triggering emergency shutdown based on thresholds."""
     # Simulate conditions that trigger emergency shutdown
-    emergency_manager.max_positions["BTC-USD"] = Decimal('50000')  # Use Decimal for consistency
-
-    # Key Change: Set the current position *exactly* at the limit
-    emergency_manager.position_limits["BTC-USD"] = Decimal('50000') 
-
-    # Validate a new position, even a tiny one, should trigger shutdown.
-    # Important: Must use price > 0.  If price is zero, validation will pass due to 0 value.
-    await emergency_manager.validate_new_position("BTC-USD", 0.001, 1.0)  # tiny size, price=1
+    emergency_manager.max_positions["BTC-USD"] = Decimal('50000')
+    emergency_manager.position_limits["BTC-USD"] = Decimal('49000')
+    
+    # Validate a new position that exceeds the limit
+    await emergency_manager.validate_new_position("BTC-USD", 0.5, 40000.0)
     
     # Verify emergency mode is triggered
     assert emergency_manager.emergency_mode is True

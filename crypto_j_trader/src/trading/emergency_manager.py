@@ -280,7 +280,7 @@ class EmergencyManager:
             self.logger.error(f"Failed to reset emergency state: {str(e)}")
             raise
 
-    async def close_positions(self) -> None:
+    async def close_positions() -> None:
         """Close all positions during an emergency."""
         try:
             for pair in self.position_limits.keys():
