@@ -19,22 +19,22 @@ def mock_market_data_service():
     mock_service = AsyncMock(spec=MarketDataService)
 
     async def mock_get_recent_prices(trading_pair):
-        if trading_pair == "HIGH_VOLATILITY":
+        if (trading_pair == "HIGH_VOLATILITY"):
             return [100, 120, 90, 110]
-        elif trading_pair == "LOW_VOLATILITY":
+        elif (trading_pair == "LOW_VOLATILITY"):
             return [100, 101, 99, 100]
-        elif trading_pair == "EMPTY":
+        elif (trading_pair == "EMPTY"):
             return []
         return [100.0, 101.0, 99.0, 100.5]
 
     mock_service.get_recent_prices = mock_get_recent_prices
 
     async def mock_get_orderbook(trading_pair):
-        if trading_pair == "ZERO_LIQUIDITY":
+        if (trading_pair == "ZERO_LIQUIDITY"):
             return {'asks': [], 'bids': []}
-        elif trading_pair == "LOW_LIQUIDITY":
+        elif (trading_pair == "LOW_LIQUIDITY"):
             return {'asks': [[100, 0.1]], 'bids': [[99, 0.1]]}
-        elif trading_pair == "EMPTY_ORDERBOOK":
+        elif (trading_pair == "EMPTY_ORDERBOOK"):
             return None
         return {
             'asks': [[100.0, 1.0], [101.0, 2.0]],
@@ -78,8 +78,6 @@ class TestRiskManager:
         liquidity_ratio = risk_manager._calculate_liquidity_ratio(order, orderbook)
         assert liquidity_ratio == Decimal('5.0') / Decimal('30.0')
 
-
-
 @pytest.mark.asyncio
 class TestRiskManagerAsync:
     async def test_assess_risk_normal_conditions(self, risk_manager, mock_market_data_service):
@@ -116,7 +114,6 @@ class TestRiskManagerAsync:
         is_valid, error_msg = await risk_manager.validate_order(order)
         assert "Insufficient liquidity" in error_msg
 
-
     async def test_validate_order_below_minimum(self, risk_manager, mock_market_data_service):
         risk_manager.market_data_service = mock_market_data_service
         order = {'trading_pair': 'BTC-USD', 'side': 'buy', 'price': Decimal('0.01'), 'size': Decimal('1.0')}
@@ -143,13 +140,13 @@ class TestRiskManagerAsync:
 
     async def test_validate_order_exceeds_maximum_by_small_amount(self, risk_manager, mock_market_data_service):
         risk_manager.market_data_service = mock_market_data_service
-        order = {'trading_pair': 'BTC-USD', 'side': 'buy', 'price': risk_manager.min_position_value / Decimal('2.0') , 'size': Decimal('1.0')} # Below minimum
+        order = {'trading_pair': 'BTC-USD', 'side': 'buy', 'price': risk_manager.min_position_value / Decimal('2.0') , 'size': Decimal('1.0')}
         is_valid, error_msg = await risk_manager.validate_order(order)
         assert "Order value below minimum position limit" in error_msg
 
     async def test_validate_order_below_minimum_by_small_amount(self, risk_manager, mock_market_data_service):
         risk_manager.market_data_service = mock_market_data_service
-        order = {'trading_pair': 'BTC-USD', 'side': 'buy', 'price': Decimal('1.0'), 'size': risk_manager.min_position_value} #At minimum
+        order = {'trading_pair': 'BTC-USD', 'side': 'buy', 'price': Decimal('1.0'), 'size': risk_manager.min_position_value}
         is_valid, error_msg = await risk_manager.validate_order(order)
         assert is_valid is True
 
@@ -190,6 +187,41 @@ class TestRiskManagerAsync:
         order = {'trading_pair': 'LOW_LIQUIDITY', 'side': 'buy', 'price': Decimal('1.0'), 'size': risk_manager.min_position_value / Decimal('2.0')}
         is_valid, error_msg = await risk_manager.validate_order(order)
         assert 'Order value below minimum position limit' in error_msg or 'Insufficient liquidity' in error_msg
+
+    @pytest.mark.asyncio
+    async def test_validate_order_edge_case_tolerance_minimum(self, risk_manager, mock_market_data_service):
+        """
+        Test that an order slightly below the minimum position value (but within tolerance) is accepted.
+        """
+        risk_manager.market_data_service = mock_market_data_service
+        # Calculate a size that results in a value ~3% below min_position_value.
+        adjusted_size = risk_manager.min_position_value * Decimal('0.97')
+        order = {
+            'trading_pair': 'BTC-USD',
+            'side': 'buy',
+            'price': Decimal('1.0'),
+            'size': adjusted_size
+        }
+        is_valid, error_msg = await risk_manager.validate_order(order)
+        assert is_valid is True, f"Order should be valid within tolerance but failed: {error_msg}"
+
+    @pytest.mark.asyncio
+    async def test_validate_order_edge_case_tolerance_loss_limit(self, risk_manager, mock_market_data_service):
+        """
+        Test that an order causing total loss slightly over the limit but within loss tolerance passes.
+        """
+        risk_manager.market_data_service = mock_market_data_service
+        # Set current daily loss to 90% of the max loss.
+        risk_manager.current_daily_loss = risk_manager.max_daily_loss * Decimal('0.9')
+        # Create an order with a potential loss that, when added, is within 10% over the max.
+        order = {
+            'trading_pair': 'BTC-USD',
+            'side': 'buy',
+            'price': Decimal('1.0'),
+            'size': risk_manager.min_position_value  # Use a small order value.
+        }
+        is_valid, error_msg = await risk_manager.validate_order(order)
+        assert is_valid is True, f"Order should be valid within loss tolerance but failed: {error_msg}"
 
     async def test_assess_risk_high_price_low_volatility(self, risk_manager, mock_market_data_service):
         risk_manager.market_data_service = mock_market_data_service
@@ -244,54 +276,75 @@ class TestRiskManagerAsync:
     async def test_validate_order_exceeds_loss_limit(self, risk_manager, mock_market_data_service):
         risk_manager.market_data_service = mock_market_data_service
         risk_manager.current_daily_loss = Decimal('0')
-        risk_manager.current_daily_loss = risk_manager.max_daily_loss * Decimal('2.0') #Set daily loss above limit
+        risk_manager.current_daily_loss = risk_manager.max_daily_loss * Decimal('2.0')
 
         order = {'trading_pair': 'BTC-USD', 'side': 'buy', 'price': Decimal('1.0'), 'size': risk_manager.min_position_value}
         is_valid, error_msg = await risk_manager.validate_order(order)
-
         assert "Maximum daily loss exceeded" in error_msg
-
 
     async def test_validate_order_within_loss_limit(self, risk_manager, mock_market_data_service):
         risk_manager.market_data_service = mock_market_data_service
-        risk_manager.current_daily_loss = risk_manager.max_daily_loss / Decimal('2.0')  # Set some initial loss
-        order = {'trading_pair': 'BTC-USD', 'side': 'sell', 'price': Decimal('1.0'), 'size': risk_manager.max_daily_loss / Decimal('4.0')}  # Valid size
+        risk_manager.current_daily_loss = risk_manager.max_daily_loss / Decimal('2.0')
+        order = {'trading_pair': 'BTC-USD', 'side': 'sell', 'price': Decimal('1.0'), 'size': risk_manager.max_daily_loss / Decimal('4.0')}
         is_valid, error_msg = await risk_manager.validate_order(order)
         assert is_valid is True
-        
-        
+
     async def test_validate_order_close_to_loss_limit(self, risk_manager, mock_market_data_service):
         risk_manager.market_data_service = mock_market_data_service
-        risk_manager.current_daily_loss = risk_manager.max_daily_loss * Decimal('0.9')  # Close to the limit
-        order = {'trading_pair': 'BTC-USD', 'side': 'sell', 'price': Decimal('1.0'), 'size': risk_manager.min_position_value}  #Small size to not exceed the limit.
-
+        risk_manager.current_daily_loss = risk_manager.max_daily_loss * Decimal('0.9')
+        order = {'trading_pair': 'BTC-USD', 'side': 'sell', 'price': Decimal('1.0'), 'size': risk_manager.min_position_value}
         is_valid, error_msg = await risk_manager.validate_order(order)
         assert is_valid is True
-        
-        
-        
+
     async def test_validate_order_exceeds_loss_limit_by_small_amount(self, risk_manager, mock_market_data_service):
         risk_manager.market_data_service = mock_market_data_service
-
-        risk_manager.current_daily_loss = risk_manager.max_daily_loss * Decimal('0.96') #Set existing loss close to the limit.
-
+        risk_manager.current_daily_loss = risk_manager.max_daily_loss * Decimal('0.96')
         order = {'trading_pair': 'BTC-USD', 'side': 'buy', 'price': Decimal('1.0'), 'size': risk_manager.min_position_value}
         is_valid, error_msg = await risk_manager.validate_order(order)
-        assert is_valid is True  #Should pass
-
-
+        assert is_valid is True
 
     async def test_validate_order_position_limit_with_low_liquidity(self, risk_manager, mock_market_data_service):
         risk_manager.market_data_service = mock_market_data_service
         order = {'trading_pair': 'LOW_LIQUIDITY', 'side': 'buy', 'price': Decimal('1.0'), 'size': risk_manager.max_position_value + 1}
         is_valid, error_msg = await risk_manager.validate_order(order)
-
-        # Check if either error message is present because either could trigger first
         assert 'Order value exceeds maximum position limit' in error_msg or 'Insufficient liquidity' in error_msg
-
 
         order = {'trading_pair': 'LOW_LIQUIDITY', 'side': 'buy', 'price': Decimal('1.0'), 'size': risk_manager.min_position_value / Decimal('2.0')}
         is_valid, error_msg = await risk_manager.validate_order(order)
-
         assert 'Order value below minimum position limit' in error_msg or 'Insufficient liquidity' in error_msg
+
+    @pytest.mark.asyncio
+    async def test_validate_order_edge_case_tolerance_minimum(self, risk_manager, mock_market_data_service):
+        """
+        Test that an order slightly below the minimum position value (but within tolerance) is accepted.
+        """
+        risk_manager.market_data_service = mock_market_data_service
+        # Calculate a size that results in a value ~3% below min_position_value.
+        adjusted_size = risk_manager.min_position_value * Decimal('0.97')
+        order = {
+            'trading_pair': 'BTC-USD',
+            'side': 'buy',
+            'price': Decimal('1.0'),
+            'size': adjusted_size
+        }
+        is_valid, error_msg = await risk_manager.validate_order(order)
+        assert is_valid is True, f"Order should be valid within tolerance but failed: {error_msg}"
+
+    @pytest.mark.asyncio
+    async def test_validate_order_edge_case_tolerance_loss_limit(self, risk_manager, mock_market_data_service):
+        """
+        Test that an order causing total loss slightly over the limit but within loss tolerance passes.
+        """
+        risk_manager.market_data_service = mock_market_data_service
+        # Set current daily loss to 90% of the max loss.
+        risk_manager.current_daily_loss = risk_manager.max_daily_loss * Decimal('0.9')
+        # Create an order with a potential loss that, when added, is within 10% over the max.
+        order = {
+            'trading_pair': 'BTC-USD',
+            'side': 'buy',
+            'price': Decimal('1.0'),
+            'size': risk_manager.min_position_value  # Use a small order value.
+        }
+        is_valid, error_msg = await risk_manager.validate_order(order)
+        assert is_valid is True, f"Order should be valid within loss tolerance but failed: {error_msg}"
 

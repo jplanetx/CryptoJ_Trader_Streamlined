@@ -1,11 +1,21 @@
-# crypto_j_trader/src/trading/risk_management.py
 import logging
 from decimal import Decimal
 import numpy as np
 from typing import Any, Dict, Optional, Tuple, List
+import asyncio  # Add import for asyncio
 
 from .market_data import MarketDataService
 from .exceptions import InsufficientLiquidityError
+from crypto_j_trader.config import MAX_LIQUIDITY_CONSUMPTION, POSITION_TOLERANCE, LOSS_TOLERANCE  # Import config values
+
+INSUFFICIENT_LIQUIDITY_ERROR = "Insufficient liquidity"
+MISSING_FIELDS_ERROR = "Missing required fields"
+PRICE_SIZE_ERROR = "Price and size must be positive"
+INVALID_SIDE_ERROR = "Invalid order side"
+MIN_POSITION_ERROR = "Order value below minimum position limit"
+MAX_POSITION_ERROR = "Order value exceeds maximum position limit"
+MAX_DAILY_LOSS_ERROR = "Maximum daily loss exceeded"
+RISK_THRESHOLD_ERROR = "Risk threshold exceeded"
 
 logger = logging.getLogger(__name__)
 
@@ -23,36 +33,52 @@ class RiskManager:
         self.max_daily_loss = self.risk_threshold * Decimal('2')  # Doubled for flexibility
         self.current_daily_loss = Decimal('0')
         self.min_liquidity_ratio = Decimal('0.5')
-        self.position_tolerance = Decimal('0.05')  # 5% tolerance for position limits
-        self.loss_tolerance = Decimal('0.1')  # 10% tolerance for loss limits
+        self.position_tolerance = POSITION_TOLERANCE
+        self.loss_tolerance = LOSS_TOLERANCE
+        # Use externalized config for liquidity consumption threshold.
+        self.max_liquidity_consumption = MAX_LIQUIDITY_CONSUMPTION
 
     def _is_within_tolerance(self, value: Decimal, target: Decimal, tolerance_multiplier: Decimal = Decimal('1.0')) -> bool:
-        """Check if value is within tolerance range of target value.
+        """
+        Check if a given value is within an acceptable tolerance range of a target value.
+        
+        For position limits:
+          - When target is the minimum position value, we allow values that are exactly the target or 
+            slightly below it (down to target * (1 - position_tolerance)).
+          - When target is the maximum position value, we allow values that are exactly the target or 
+            slightly above it (up to target * (1 + position_tolerance)).
+        For loss limits:
+          - Values are allowed up to target * (1 + loss_tolerance).
         
         Args:
-            value: The value to check
-            target: The target value to compare against
-            tolerance_multiplier: Optional multiplier for tolerance range
+            value (Decimal): The value to check.
+            target (Decimal): The reference value.
+            tolerance_multiplier (Decimal): Multiplier to adjust the tolerance range.
+            
+        Returns:
+            bool: True if value is within tolerance of target, False otherwise.
         """
-        # Handle exact matches first
+        # Handle exact matches first.
         if value == target:
             return True
-            
-        # Handle position limit checks
+                
+        # Handle position limit checks.
         if target == self.min_position_value:
-            # For minimum position, value can be at min or within tolerance below
-            return value >= target or value >= (target * (Decimal('1.0') - self.position_tolerance * tolerance_multiplier))
+            # For minimum position, allow orders at or slightly below target.
+            allowed_min = target * (Decimal('1.0') - self.position_tolerance * tolerance_multiplier)
+            return value >= target or value >= allowed_min
         elif target == self.max_position_value:
-            # For maximum position, value can be at max or within tolerance above
-            return value <= target or value <= (target * (Decimal('1.0') + self.position_tolerance * tolerance_multiplier))
-        # Handle loss limit checks
+            # For maximum position, allow orders at or slightly above target.
+            allowed_max = target * (Decimal('1.0') + self.position_tolerance * tolerance_multiplier)
+            return value <= target or value <= allowed_max
+        # Handle loss limit checks.
         elif target == self.max_daily_loss:
-            # Always allow if under max loss
             if value <= target:
                 return True
-            # Allow if within tolerance
-            return value <= (target * (Decimal('1.0') + self.loss_tolerance * tolerance_multiplier))
-        # Default to absolute tolerance check
+            allowed_loss = target * (Decimal('1.0') + self.loss_tolerance * tolerance_multiplier)
+            return value <= allowed_loss
+        
+        # Default absolute tolerance check.
         return abs(value - target) <= (target * self.position_tolerance * tolerance_multiplier)
 
     async def assess_risk(self, price: Decimal, trading_pair: str, size: Decimal) -> bool:
@@ -118,16 +144,16 @@ class RiskManager:
             # 1. Basic field validation
             required_fields = ['trading_pair', 'side', 'price', 'size']
             if not all(key in order for key in required_fields):
-                return False, "Missing required fields"
+                return False, MISSING_FIELDS_ERROR
 
             price = Decimal(str(order['price']))
             size = Decimal(str(order['size']))
             if price <= 0 or size <= 0:
-                return False, "Price and size must be positive"
+                return False, PRICE_SIZE_ERROR
 
             side = order['side'].lower()
             if side not in ('buy', 'sell'):
-                return False, f"Invalid order side: {order.get('side', 'N/A')}"
+                return False, INVALID_SIDE_ERROR
 
             # 2. Calculate order value
             order_value = price * size
@@ -135,10 +161,10 @@ class RiskManager:
             # 3. Position limit checks with tolerance
             # Check minimum position limit
             if order_value < self.min_position_value and not self._is_within_tolerance(order_value, self.min_position_value):
-                return False, "Order value below minimum position limit"
+                return False, MIN_POSITION_ERROR
             # Check maximum position limit
             if order_value > self.max_position_value and not self._is_within_tolerance(order_value, self.max_position_value):
-                return False, "Order value exceeds maximum position limit"
+                return False, MAX_POSITION_ERROR
 
             # 4. Daily loss limit check with tolerance
             # Calculate potential loss based on order side
@@ -150,39 +176,48 @@ class RiskManager:
 
             total_loss = self.current_daily_loss + potential_loss
             if total_loss > self.max_daily_loss and not self._is_within_tolerance(total_loss, self.max_daily_loss):
-                return False, "Maximum daily loss exceeded"
+                return False, MAX_DAILY_LOSS_ERROR
 
             # 5. Market validation
             if self.market_data_service:
                 try:
-                    # Get orderbook data
-                    orderbook = await self.market_data_service.get_orderbook(order['trading_pair'])
+                    # Attempt to fetch orderbook data with retries.
+                    orderbook = None
+                    for attempt in range(3):
+                        try:
+                            orderbook = await self.market_data_service.get_orderbook(order['trading_pair'])
+                            if orderbook:
+                                break
+                        except Exception as e:
+                            logger.warning(f"Attempt {attempt + 1} to fetch orderbook for {order['trading_pair']} failed: {e}")
+                        await asyncio.sleep(1)  # Delay between retries
+
                     if not orderbook:
-                        logger.warning(f"No orderbook data for {order['trading_pair']}")
-                        return False, "Insufficient liquidity"
+                        logger.warning(f"No orderbook data for {order['trading_pair']} after retries")
+                        return False, INSUFFICIENT_LIQUIDITY_ERROR
 
                     # Check required orderbook side exists
                     book_side = 'asks' if side == 'buy' else 'bids'
                     if not orderbook.get(book_side):
                         logger.warning(f"No {book_side} data in orderbook for {order['trading_pair']}")
-                        return False, "Insufficient liquidity"
+                        return False, INSUFFICIENT_LIQUIDITY_ERROR
 
-                    # Check liquidity ratio
+                    # Check liquidity consumption: Ensure the order does not consume too high a fraction of available liquidity.
                     liquidity_ratio = self._calculate_liquidity_ratio(order, orderbook)
-                    if liquidity_ratio < self.min_liquidity_ratio:
-                        logger.warning(f"Liquidity ratio {liquidity_ratio} below minimum {self.min_liquidity_ratio}")
-                        return False, "Insufficient liquidity"
+                    if liquidity_ratio > self.max_liquidity_consumption:
+                        logger.warning(f"Liquidity ratio {liquidity_ratio} exceeds maximum allowed consumption threshold {self.max_liquidity_consumption}")
+                        return False, INSUFFICIENT_LIQUIDITY_ERROR
 
                 except InsufficientLiquidityError as e:
                     logger.warning(f"Insufficient liquidity: {str(e)}")
-                    return False, "Insufficient liquidity"
+                    return False, INSUFFICIENT_LIQUIDITY_ERROR
                 except Exception as e:
                     logger.error(f"Market validation error: {e}")
-                    return False, "Insufficient liquidity"
+                    return False, INSUFFICIENT_LIQUIDITY_ERROR
 
             # 6. Risk assessment last
             if not await self.assess_risk(price, order['trading_pair'], size):
-                return False, "Risk threshold exceeded"
+                return False, RISK_THRESHOLD_ERROR
 
             return True, ""
         except Exception as e:
