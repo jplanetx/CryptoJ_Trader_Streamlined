@@ -298,3 +298,95 @@ class TestTradingBot:
         
         # Verify that all tasks completed successfully (no exceptions raised)
         # Add more specific assertions as needed
+
+    @pytest.mark.asyncio
+    async def test_get_position_existing_symbol(self, trading_bot):
+        """Test getting position for an existing symbol"""
+        await trading_bot.execute_order('buy', 1.0, 50000.0, 'BTC-USD')
+        position = await trading_bot.get_position('BTC-USD')
+        assert position['size'] == 1.0
+        assert position['entry_price'] == 50000.0
+
+    @pytest.mark.asyncio
+    async def test_update_market_price_no_position(self, trading_bot):
+        """Test updating market price with no existing position"""
+        await trading_bot.update_market_price('BTC-USD', 51000.0)
+        position = await trading_bot.get_position('BTC-USD')
+        assert position['unrealized_pnl'] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_check_positions_no_stop_loss(self, trading_bot):
+        """Test checking positions with no stop loss set"""
+        await trading_bot.execute_order('buy', 1.0, 50000.0, 'BTC-USD')
+        await trading_bot.update_market_price('BTC-USD', 51000.0)
+        await trading_bot.check_positions()
+        position = await trading_bot.get_position('BTC-USD')
+        assert position['size'] == 1.0
+
+    @pytest.mark.asyncio
+    async def test_check_positions_with_stop_loss(self, trading_bot):
+        """Test checking positions with stop loss triggered"""
+        await trading_bot.execute_order('buy', 1.0, 50000.0, 'BTC-USD')
+        await trading_bot.update_market_price('BTC-USD', 47000.0)
+        await trading_bot.check_positions()
+        position = await trading_bot.get_position('BTC-USD')
+        assert position['size'] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_reset_system_with_positions(self, trading_bot):
+        """Test resetting system with existing positions"""
+        await trading_bot.execute_order('buy', 1.0, 50000.0, 'BTC-USD')
+        await trading_bot.reset_system()
+        position = await trading_bot.get_position('BTC-USD')
+        assert position['size'] == 0.0
+        assert not trading_bot.positions
+        assert not trading_bot.market_prices
+        assert trading_bot.is_healthy
+        assert not trading_bot.shutdown_requested
+
+    @pytest.mark.asyncio
+    async def test_market_data_handler_integration(self, trading_bot):
+        """Test integration with market data handler"""
+        mock_market_data_handler = AsyncMock()
+        trading_bot.market_data_handler = mock_market_data_handler
+        await trading_bot.update_market_price('BTC-USD', 51000.0)
+        mock_market_data_handler.update_price.assert_called_once_with('BTC-USD')
+
+    @pytest.mark.asyncio
+    async def test_order_executor_integration(self, trading_bot):
+        """Test integration with order executor"""
+        mock_order_executor = AsyncMock()
+        trading_bot.order_executor = mock_order_executor
+        mock_order_executor.create_order.return_value = {'id': 'order123'}
+        result = await trading_bot.execute_order('buy', 1.0, 50000.0, 'BTC-USD')
+        assert result['status'] == 'success'
+        assert result['order_id'] == 'order123'
+        mock_order_executor.create_order.assert_called_once_with('BTC-USD', 'buy', Decimal('1.0'), Decimal('50000.0'))
+
+    @pytest.mark.asyncio
+    async def test_check_health(self, trading_bot):
+        """Test system health check"""
+        health_status = await trading_bot.check_health()
+        assert health_status['status'] == 'healthy'
+        assert 'last_check' in health_status
+        assert 'api_status' in health_status
+        assert 'metrics' in health_status
+
+    @pytest.mark.asyncio
+    async def test_emergency_shutdown_no_positions(self, trading_bot):
+        """Test emergency shutdown with no positions"""
+        result = await trading_bot.emergency_shutdown()
+        assert result['status'] == 'success'
+        assert trading_bot.shutdown_requested
+        assert not trading_bot.is_healthy
+
+    @pytest.mark.asyncio
+    async def test_reset_daily_stats(self, trading_bot):
+        """Test resetting daily statistics"""
+        await trading_bot.execute_order('buy', 1.0, 50000.0, 'BTC-USD')
+        await trading_bot.reset_daily_stats()
+        stats = trading_bot.get_daily_stats()
+        assert stats['trades'] == 0
+        assert stats['volume'] == 0.0
+        assert stats['pnl'] == 0.0
+        assert trading_bot.daily_loss == 0.0

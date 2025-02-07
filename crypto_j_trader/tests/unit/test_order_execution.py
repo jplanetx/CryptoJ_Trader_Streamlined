@@ -355,3 +355,56 @@ class TestOrderExecution:
                 'quantity': 'invalid',
                 'type': 'market'
             })
+
+import pytest
+from decimal import Decimal
+from unittest.mock import AsyncMock
+from crypto_j_trader.src.trading.trading_core import TradingBot
+
+@pytest.fixture
+def config_order():
+    return {
+        'trading_pairs': ['BTC-USD'],
+        'risk_management': {
+            'max_position_size': 5.0,
+            'max_daily_loss': 500.0,
+            'stop_loss_pct': 0.05
+        }
+    }
+
+@pytest.fixture
+def trading_bot_order(config_order):
+    return TradingBot(config=config_order)
+
+def test_market_order_success(trading_bot_order, event_loop):
+    # Paper trading: valid order should update position and stats properly.
+    result = event_loop.run_until_complete(
+        trading_bot_order.execute_order('buy', 1.0, 60000.0, 'BTC-USD')
+    )
+    assert result['status'] == 'success'
+    pos = event_loop.run_until_complete(trading_bot_order.get_position('BTC-USD'))
+    assert pos['size'] == 1.0
+    # ...existing assertions...
+
+def test_market_order_failure_invalid_params(trading_bot_order, event_loop):
+    # Invalid size and price should return error.
+    res1 = event_loop.run_until_complete(
+        trading_bot_order.execute_order('buy', 0.0, 60000.0, 'BTC-USD')
+    )
+    res2 = event_loop.run_until_complete(
+        trading_bot_order.execute_order('buy', 1.0, 0.0, 'BTC-USD')
+    )
+    assert res1['status'] == 'error'
+    assert res2['status'] == 'error'
+
+def test_order_executor_integration(trading_bot_order, event_loop):
+    # When order_executor is provided, result should be taken from it.
+    mock_executor = AsyncMock()
+    mock_executor.create_order.return_value = {'id': 'exec_001'}
+    mock_executor.get_position.return_value = {'quantity': 1, 'entry_price': 60000.0}
+    trading_bot_order.order_executor = mock_executor
+    result = event_loop.run_until_complete(
+        trading_bot_order.execute_order('buy', 1.0, 60000.0, 'BTC-USD')
+    )
+    assert result['status'] == 'success'
+    assert result['order_id'] == 'exec_001'

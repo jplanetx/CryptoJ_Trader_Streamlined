@@ -5,8 +5,9 @@ import tempfile
 from decimal import Decimal
 from typing import Any, Dict
 from pathlib import Path
-
+import asyncio
 from crypto_j_trader.src.trading import EmergencyManager
+from crypto_j_trader.src.trading.trading_core import TradingBot
 
 @pytest.fixture
 def mock_config(emergency_config) -> Dict[str, Any]:
@@ -42,6 +43,21 @@ def emergency_manager(mock_config, temp_dir) -> EmergencyManager:
     state_file = os.path.join(temp_dir, mock_config["state_file"])
     manager = EmergencyManager(config=mock_config, state_file=state_file)
     return manager
+
+@pytest.fixture
+def config_emergency():
+    return {
+        'trading_pairs': ['BTC-USD', 'ETH-USD'],
+        'risk_management': {
+            'max_position_size': 5.0,
+            'max_daily_loss': 500.0,
+            'stop_loss_pct': 0.05
+        }
+    }
+
+@pytest.fixture
+def trading_bot_emergency(config_emergency):
+    return TradingBot(config=config_emergency)
 
 @pytest.mark.asyncio
 async def test_validate_new_position(emergency_manager):
@@ -185,3 +201,37 @@ async def test_system_state_management(emergency_manager):
     success = await emergency_manager.restore_normal_operation()
     assert success is True
     assert emergency_manager.emergency_mode is False
+
+def test_emergency_shutdown_procedure(trading_bot_emergency, event_loop):
+    # Preload positions in two symbols.
+    event_loop.run_until_complete(
+        trading_bot_emergency.execute_order('buy', 1.0, 60000.0, 'BTC-USD')
+    )
+    event_loop.run_until_complete(
+        trading_bot_emergency.execute_order('sell', 1.0, 2500.0, 'ETH-USD')
+    )
+    result = event_loop.run_until_complete(trading_bot_emergency.emergency_shutdown())
+    assert result['status'] == 'success'
+    assert trading_bot_emergency.shutdown_requested
+    assert not trading_bot_emergency.is_healthy
+    # Verify positions are cleared.
+    pos_btc = event_loop.run_until_complete(trading_bot_emergency.get_position('BTC-USD'))
+    pos_eth = event_loop.run_until_complete(trading_bot_emergency.get_position('ETH-USD'))
+    assert pos_btc['size'] == 0.0
+    assert pos_eth['size'] == 0.0
+
+def test_restore_normal_operation_after_emergency(trading_bot_emergency, event_loop):
+    # Shutdown and then reset system.
+    event_loop.run_until_complete(
+        trading_bot_emergency.execute_order('buy', 1.0, 60000.0, 'BTC-USD')
+    )
+    event_loop.run_until_complete(trading_bot_emergency.emergency_shutdown())
+    # Reset system to normal state.
+    event_loop.run_until_complete(trading_bot_emergency.reset_system())
+    assert trading_bot_emergency.is_healthy
+    assert not trading_bot_emergency.shutdown_requested
+    # Check new orders work as expected.
+    res = event_loop.run_until_complete(
+        trading_bot_emergency.execute_order('buy', 1.0, 60000.0, 'BTC-USD')
+    )
+    assert res['status'] == 'success'

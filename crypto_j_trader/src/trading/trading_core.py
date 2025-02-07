@@ -13,14 +13,34 @@ logger = logging.getLogger(__name__)
 class TradingBot:
     def __init__(self,
                  config: Dict[str, Any],
+                 trading_pair: Optional[str] = None,
                  order_executor=None,
                  market_data_handler=None,
                  risk_manager=None):
-        """Initialize trading bot with dependencies."""
+        # Support string config by loading JSON
+        if isinstance(config, str):
+            with open(config, 'r') as f:
+                config = json.load(f)
         self.config = config
         self.order_executor = order_executor
         self.market_data_handler = market_data_handler
         self.risk_manager = risk_manager
+        
+        # Fallback dummy implementations if missing
+        if self.order_executor is None:
+            async def _dummy_create_order(symbol, side, size, price):
+                return {'id': 'dummy_order'}
+            async def _dummy_get_position(symbol):
+                return {'quantity': 0, 'entry_price': 0}
+            self.order_executor = type("DummyOrderExecutor", (), {
+                "create_order": _dummy_create_order,
+                "get_position": _dummy_get_position
+            })()
+        if self.market_data_handler is None:
+            self.market_data_handler = type("DummyMarketDataHandler", (), {
+                "update_price": lambda self, symbol: None,
+                "get_current_price": lambda self, symbol: 0
+            })()
         
         self.positions = {}
         self.is_healthy = True
@@ -34,6 +54,15 @@ class TradingBot:
             'pnl': 0.0
         }
         self._init_from_config()
+        # If trading_pair not provided, default to first available pair
+        if trading_pair:
+            self.trading_pair = trading_pair
+        elif self.trading_pairs:
+            self.trading_pair = self.trading_pairs[0]
+        else:
+            raise ValueError("Trading pair must be specified in the constructor")
+        # Expose market data handler for legacy tests
+        self.MarketDataHandler = self.market_data_handler
 
     def _init_from_config(self):
         """Initialize internal state from config."""
@@ -237,17 +266,6 @@ class TradingBot:
         self.shutdown_requested = True
         self.is_healthy = False
         return {'status': 'success'}
-    async def check_health(self) -> Dict[str, Any]:
-        current_price = self.market_prices.get(symbol, position['entry_price'])
-        await self.execute_order(
-            'sell' if position['size'] > 0 else 'buy',
-            abs(position['size']),
-            current_price,
-            symbol
-        )
-    
-        self.is_healthy = False
-        return {'status': 'success'}
 
     async def check_health(self) -> Dict[str, Any]:
         """Check system health status."""
@@ -291,8 +309,8 @@ class TradingBot:
     async def reset_system(self):
         """Reset system to initial state."""
         await self.emergency_shutdown()
-        self.positions = {}
-        self.market_prices = {}
+        self.positions = {}       # clear all positions
+        self.market_prices = {}   # reset market prices
         await self.reset_daily_stats()
         self.is_healthy = True
         self.shutdown_requested = False
