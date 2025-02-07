@@ -37,10 +37,10 @@ def temp_dir():
         yield tmpdir
 
 @pytest.fixture
-def emergency_manager(test_config_path, mock_config, temp_dir) -> EmergencyManager:
+def emergency_manager(mock_config, temp_dir) -> EmergencyManager:
     """Fixture providing EmergencyManager instance."""
     state_file = os.path.join(temp_dir, mock_config["state_file"])
-    manager = EmergencyManager(config_path=test_config_path, state_file=state_file)
+    manager = EmergencyManager(config=mock_config, state_file=state_file)
     return manager
 
 @pytest.mark.asyncio
@@ -128,7 +128,7 @@ async def test_emergency_state_persistence(emergency_manager, temp_dir):
     
     # Create new manager instance with same state file
     new_manager = EmergencyManager(
-        config_path=emergency_manager.config_path,
+        config=emergency_manager.config,  # Use the stored configuration
         state_file=emergency_manager.state_file
     )
     
@@ -153,8 +153,14 @@ def test_reset_emergency_state(emergency_manager):
 async def test_trigger_emergency_shutdown(emergency_manager):
     """Test triggering emergency shutdown based on thresholds."""
     # Simulate conditions that trigger emergency shutdown
-    emergency_manager.position_limits["BTC-USD"] = Decimal('60000')
-    await emergency_manager.validate_new_position("BTC-USD", 1.0, 50000.0)
+    emergency_manager.max_positions["BTC-USD"] = Decimal('50000')  # Use Decimal for consistency
+
+    # Key Change: Set the current position *exactly* at the limit
+    emergency_manager.position_limits["BTC-USD"] = Decimal('50000') 
+
+    # Validate a new position, even a tiny one, should trigger shutdown.
+    # Important: Must use price > 0.  If price is zero, validation will pass due to 0 value.
+    await emergency_manager.validate_new_position("BTC-USD", 0.001, 1.0)  # tiny size, price=1
     
     # Verify emergency mode is triggered
     assert emergency_manager.emergency_mode is True
