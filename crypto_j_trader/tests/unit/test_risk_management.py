@@ -10,7 +10,9 @@ from crypto_j_trader.src.trading.exceptions import InsufficientLiquidityError
 
 @pytest.fixture
 def risk_manager():
-    return RiskManager(risk_threshold=0.75)
+    rm = RiskManager(risk_threshold=0.75)
+    rm.current_daily_loss = Decimal('0')  # Ensure clean state
+    return rm
 
 @pytest.fixture
 def mock_market_data_service():
