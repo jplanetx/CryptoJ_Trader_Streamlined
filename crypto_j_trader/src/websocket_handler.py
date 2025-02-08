@@ -6,6 +6,9 @@ class WebsocketHandler:
     async def connect(self):
         # ...existing connect logic...
         self.connected = True
+        # Replace any datetime.utcnow() with:
+        from datetime import datetime, timezone
+        self.last_message_time = datetime.now(timezone.utc)  # modified
 
     async def disconnect(self):
         # ...existing disconnect logic...

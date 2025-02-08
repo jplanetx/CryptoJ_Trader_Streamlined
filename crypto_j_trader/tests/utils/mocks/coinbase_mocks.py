@@ -5,6 +5,8 @@ from typing import Dict, Any, List
 import json
 from datetime import datetime, timezone
 import unittest.mock
+from crypto_j_trader.src.trading.exchange_service import ExchangeServiceError
+
 
 class MockCoinbaseResponses:
     """Collection of mock Coinbase API responses for testing."""
@@ -208,21 +210,13 @@ class MockExchangeService(unittest.mock.Mock):
         self.get_historical_data = unittest.mock.AsyncMock(return_value={})
         self.get_current_price = unittest.mock.AsyncMock(return_value={})
         self.start_price_feed = unittest.mock.AsyncMock()
-        
+
         # Mock order-related methods
-        self.place_market_order = unittest.mock.AsyncMock(return_value={
-            'status': 'success',
-            'order_id': 'mock-order-id',
-            'executed_price': 50000.0
-        })
-        self.place_limit_order = unittest.mock.AsyncMock(return_value={
-            'status': 'success',
-            'order_id': 'mock-order-id',
-            'executed_price': 50000.0
-        })
+        self.place_market_order = unittest.mock.AsyncMock(return_value={'order_id': 'test_order_123', 'product_id': 'BTC-USD', 'status': 'pending'})
+        self.place_limit_order = unittest.mock.AsyncMock(return_value={'order_id': 'test_order_123', 'product_id': 'BTC-USD', 'status': 'pending'})
         self.get_order_status = unittest.mock.AsyncMock(return_value={
             'status': 'success',
-            'order_id': 'mock-order-id',
+            'order_id': 'test_order_123',
             'price': '50000.0'
         })
         self.get_product_ticker = unittest.mock.AsyncMock(return_value={
@@ -230,3 +224,12 @@ class MockExchangeService(unittest.mock.Mock):
             'product_id': 'BTC-USD'
         })
         self.cancel_order = unittest.mock.AsyncMock(return_value={'success': True})
+
+    async def place_market_order_failure(self, *args, **kwargs):
+        raise ExchangeServiceError("Market order failed")
+
+    async def place_limit_order_failure(self, *args, **kwargs):
+        raise ExchangeServiceError("Limit order failed")
+
+    async def get_account_balance(self, *args, **kwargs):
+        return {'available': '1.5', 'hold': '0.5'}

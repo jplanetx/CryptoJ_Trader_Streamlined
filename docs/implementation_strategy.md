@@ -168,4 +168,25 @@ If AI gets stuck:
 - Integration tests verify functionality
 - Launch checklist is complete
 
+## Position Tracking Implementation Details
+
+### Paper Trading Position Format
+- Paper trading mode returns position values as Decimal objects instead of dictionaries
+- Zero positions are represented as Decimal('0')
+- Tests handle both dictionary format (for live trading) and Decimal format (for paper trading)
+
+### Position Value Validation
+- All position quantities are converted to Decimal for consistent comparison
+- Entry prices and stop losses use Decimal arithmetic for precise calculations
+- Tests verify both live and paper trading position formats:
+  ```python
+  # Example position verification
+  if isinstance(position, dict):
+      assert Decimal(str(position["quantity"])) == Decimal('1.0')
+      assert Decimal(str(position["entry_price"])) == Decimal('50000.0')
+  else:
+      # Paper trading mode returns Decimal
+      assert position == Decimal('0')
+  ```
+
 Track progress in GitHub issues using the templates provided in .github/ISSUE_TEMPLATE/

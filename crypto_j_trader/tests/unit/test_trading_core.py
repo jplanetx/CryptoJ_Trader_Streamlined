@@ -10,8 +10,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from crypto_j_trader.src.trading.trading_core import TradingBot
 
+@patch("crypto_j_trader.src.trading.market_data.MarketDataHandler")
 @pytest.fixture
-def mock_config():
+def mock_config(mock_market_data_handler):
     """Test configuration"""
     return {
         'trading_pairs': ['BTC-USD'],

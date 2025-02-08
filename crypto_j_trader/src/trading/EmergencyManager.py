@@ -15,13 +15,14 @@ class EmergencyManager:
 
     async def validate_new_position(self, trading_pair, size, price) -> bool:
         risk_limit = self.config.get("risk_limits", {}).get(trading_pair, float('inf'))
+        # Do not trigger emergency mode here; simply check the value
         if size * price > risk_limit:
-            self.emergency_mode = True
             return False
         return True
 
     async def emergency_shutdown(self):
         self.emergency_mode = True
+        self.position_limits = {}  # clear all position limits
         self._save_state()
         return {'status': 'success'}
 
@@ -34,12 +35,16 @@ class EmergencyManager:
         return {
             "emergency_mode": self.emergency_mode,
             "position_limits": self.position_limits,
-            "exposure_percentages": {},
+            "exposure_percentages": {},  # expected key placeholder
             "timestamp": ""
         }
 
     def update_position_limits(self, new_limits):
+        for k, v in new_limits.items():
+            if float(v) < 0:
+                raise ValueError("Negative limit not allowed")
         self.position_limits.update(new_limits)
+        self._save_state()
 
     def _save_state(self):
         with open(self.state_file, 'w') as f:

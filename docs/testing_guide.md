@@ -148,6 +148,43 @@ async def test_connection_management(websocket_system):
     # ... (rest of the test)
 ```
 
+### Position Tracking Tests
+
+Position tracking tests need to handle both paper trading and live trading position formats:
+
+```python
+@pytest.mark.unit
+async def test_position_tracking():
+    # Test position in paper trading mode
+    paper_position = await trading_system.get_position("BTC-USD")
+    if isinstance(paper_position, dict):
+        # Live trading format
+        assert Decimal(str(paper_position['size'])) == Decimal('1.0')
+        assert Decimal(str(paper_position['entry_price'])) == Decimal('50000.0')
+    else:
+        # Paper trading mode returns Decimal
+        assert paper_position == Decimal('0')
+
+    # Test position updates
+    await trading_system.execute_order('buy', Decimal('0.5'), Decimal('51000.0'))
+    updated_position = await trading_system.get_position("BTC-USD")
+    if isinstance(updated_position, dict):
+        assert Decimal(str(updated_position['size'])) == Decimal('1.5')
+        # Verify weighted average price calculation
+        expected_avg_price = (Decimal('1.0') * Decimal('50000.0') +
+                            Decimal('0.5') * Decimal('51000.0')) / Decimal('1.5')
+        assert Decimal(str(updated_position['entry_price'])) == expected_avg_price
+    else:
+        assert updated_position == Decimal('0')
+```
+
+Key testing considerations:
+- Always convert position values to Decimal for comparisons
+- Handle both dictionary and Decimal return formats
+- Test weighted average price calculations with Decimal arithmetic
+- Verify paper trading mode returns Decimal('0') for positions
+- Include tests for position updates, reductions, and closures
+
 ### Market Data Tests
 
 The `test_market_data.py` file in `tests/unit/` directory provides unit tests for the Market Data component.

@@ -34,9 +34,11 @@ def state_file(tmp_path):
     return str(tmp_path / "emergency_state.json")
 
 @pytest.fixture
-def emergency_manager(config_file, state_file):
-    """Create an EmergencyManager instance."""
-    return EmergencyManager(config_file, state_file)
+def emergency_manager():
+    dummy_config = {"shutdown_threshold": 0.1, "recovery_time": 60, "max_positions": {}, "risk_limits": {}}
+    # Provide a temporary state file path (could be a dummy or temp file)
+    state_file = "dummy_state.json"
+    return EmergencyManager(config=dummy_config, state_file=state_file)
 
 @pytest.mark.asyncio
 async def test_validate_new_position_normal(emergency_manager):
@@ -144,7 +146,7 @@ async def test_emergency_shutdown_persistence(emergency_manager):
     
     # Create new instance with same state file
     new_manager = EmergencyManager(
-        emergency_manager.config_path,
+        config_file,
         emergency_manager.state_file
     )
     

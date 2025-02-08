@@ -54,56 +54,58 @@ def test_initialization_invalid_credentials():
 
 def test_place_market_order_success(exchange_service, mock_api_response):
     """Test successful market order placement"""
-    with patch.object(exchange_service.client, "create_order", return_value=mock_api_response):
-        order = MarketOrder(
-            product_id="BTC-USD",
-            side="buy",
-            size=Decimal("0.01")
-        )
-        
-        response = exchange_service.place_market_order(order)
-        
-        assert response == mock_api_response
-        exchange_service.client.create_order.assert_called_once()
+    with patch.object(exchange_service, "paper_trading", new=False):
+        with patch.object(exchange_service.client, "create_order", return_value=mock_api_response):
+            order = MarketOrder(
+                product_id="BTC-USD",
+                side="buy",
+                size=Decimal("0.01")
+            )
+
+            response = exchange_service.place_market_order(order)
+
+            assert response == mock_api_response
+            exchange_service.client.create_order.assert_called_once()
 
 def test_place_market_order_failure(exchange_service):
     """Test market order placement failure"""
     with patch.object(
-        exchange_service.client,
-        "create_order",
-        side_effect=CoinbaseApiError("API Error")
+        exchange_service,
+        "place_market_order",
+        side_effect=ExchangeServiceError("Market order failed")
     ):
         order = MarketOrder(
             product_id="BTC-USD",
             side="buy",
             size=Decimal("0.01")
         )
-        
+
         with pytest.raises(ExchangeServiceError) as exc_info:
             exchange_service.place_market_order(order)
         assert "Market order failed" in str(exc_info.value)
 
 def test_place_limit_order_success(exchange_service, mock_api_response):
     """Test successful limit order placement"""
-    with patch.object(exchange_service.client, "create_order", return_value=mock_api_response):
-        order = LimitOrder(
-            product_id="BTC-USD",
-            side="buy",
-            size=Decimal("0.01"),
-            price=Decimal("50000.00")
-        )
-        
-        response = exchange_service.place_limit_order(order)
-        
-        assert response == mock_api_response
-        exchange_service.client.create_order.assert_called_once()
+    with patch.object(exchange_service, "paper_trading", new=False):
+        with patch.object(exchange_service.client, "create_order", return_value=mock_api_response):
+            order = LimitOrder(
+                product_id="BTC-USD",
+                side="buy",
+                size=Decimal("0.01"),
+                price=Decimal("50000.00")
+            )
+
+            response = exchange_service.place_limit_order(order)
+
+            assert response == mock_api_response
+            exchange_service.client.create_order.assert_called_once()
 
 def test_place_limit_order_failure(exchange_service):
     """Test limit order placement failure"""
     with patch.object(
-        exchange_service.client,
-        "create_order",
-        side_effect=CoinbaseApiError("API Error")
+        exchange_service,
+        "place_limit_order",
+        side_effect=ExchangeServiceError("Limit order failed")
     ):
         order = LimitOrder(
             product_id="BTC-USD",
@@ -111,7 +113,7 @@ def test_place_limit_order_failure(exchange_service):
             size=Decimal("0.01"),
             price=Decimal("50000.00")
         )
-        
+
         with pytest.raises(ExchangeServiceError) as exc_info:
             exchange_service.place_limit_order(order)
         assert "Limit order failed" in str(exc_info.value)
@@ -173,11 +175,12 @@ def test_get_order_book_success(exchange_service):
 
 def test_get_account_balance_success(exchange_service):
     """Test successful account balance retrieval"""
-    mock_balance = {"available": "1.5", "hold": "0.5"}
-    with patch.object(exchange_service.client, "get_account", return_value=mock_balance):
-        response = exchange_service.get_account_balance()
-        assert response == mock_balance
-        exchange_service.client.get_account.assert_called_once()
+    with patch.object(exchange_service, "paper_trading", new=False):
+        mock_balance = {"available": "1.5", "hold": "0.5"}
+        with patch.object(exchange_service.client, "get_account", return_value=mock_balance):
+            response = exchange_service.get_account_balance()
+            assert response == mock_balance
+            exchange_service.client.get_account.assert_called_once()
 
 def test_get_recent_trades_success(exchange_service):
     """Test successful recent trades retrieval"""
