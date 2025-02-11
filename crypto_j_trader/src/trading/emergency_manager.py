@@ -83,20 +83,65 @@ class EmergencyManager:
             raise
 
     async def validate_new_position(self, trading_pair: str, size: float, price: float, market_data: Optional[Dict] = None) -> bool:
+        """
+        Validate if a new position can be opened.
+        
+        Args:
+            trading_pair: Trading pair symbol
+            size: Position size
+            price: Current price
+            market_data: Optional market data for additional validation
+            
+        Returns:
+            bool: True if position is valid, False otherwise
+        """
         try:
-            # Check for extreme price movements
-            if market_data and self._check_price_movement(market_data, price):
-                self.logger.warning(f"New position blocked for {trading_pair}: Extreme price movement")
+            # Block all new positions in emergency mode
+            if self.emergency_mode:
+                self.logger.warning(f"New position blocked for {trading_pair}: System in emergency mode")
                 return False
-            # Check for volume spikes
-            if market_data and self._check_volume_spike(market_data):
-                self.logger.warning(f"New position blocked for {trading_pair}: Volume spike detected")
+
+            # For paper trading, skip market data validation if not provided
+            if not market_data:
+                self.logger.debug(f"No market data provided for {trading_pair}, proceeding with basic validation")
+            else:
+                # Check for extreme price movements
+                if self._check_price_movement(market_data, price):
+                    self.logger.warning(f"New position blocked for {trading_pair}: Extreme price movement")
+                    return False
+                
+                # Check for volume spikes
+                if self._check_volume_spike(market_data):
+                    self.logger.warning(f"New position blocked for {trading_pair}: Volume spike detected")
+                    return False
+
+            # Calculate new position value
+            new_position_value = Decimal(str(size)) * Decimal(str(price))
+            
+            # Get current position
+            current_position = self.position_limits.get(trading_pair, Decimal('0'))
+            
+            # Calculate total position value after this trade
+            total_position_value = current_position + new_position_value
+            
+            self.logger.debug(f"Current position: {current_position}")
+            self.logger.debug(f"New position value: {new_position_value}")
+            self.logger.debug(f"Total position value: {total_position_value}")
+
+            # Check against risk limit
+            risk_limit = Decimal(str(self.risk_limits.get(trading_pair, float('inf'))))
+            if total_position_value > risk_limit:
+                self.logger.warning(f"Position would exceed risk limit for {trading_pair}")
                 return False
-            # Validate position size against risk limits
-            risk_limit = self.config.get("risk_limits", {}).get(trading_pair, float('inf'))
-            if size * price > risk_limit:
+
+            # Check against max position
+            max_position = Decimal(str(self.max_positions.get(trading_pair, float('inf'))))
+            if total_position_value > max_position:
+                self.logger.warning(f"Position would exceed maximum allowed for {trading_pair}")
                 return False
+
             return True
+
         except Exception as e:
             self.logger.error(f"Error validating new position for {trading_pair}: {e}")
             return False
@@ -142,16 +187,25 @@ class EmergencyManager:
 
     def _check_price_movement(self, data: Dict, current_price: float) -> bool:
         """Check for excessive price movement."""
-        price_change_threshold = self.emergency_thresholds.get('emergency_price_change_threshold', 0.1)
-        previous_price = data.get('price', current_price)
+        if not data:
+            return False
+        price_change_threshold = float(self.config.get('emergency_price_change_threshold', 0.1))
+        previous_price = float(data.get('last_price', current_price))
+        if previous_price <= 0:
+            return False
         price_change = abs(current_price - previous_price) / previous_price
         return price_change > price_change_threshold
 
     def _check_volume_spike(self, data: Dict) -> bool:
         """Check for volume spike."""
-        volume_spike_threshold = self.emergency_thresholds.get('volume_spike_threshold', 5.0)
-        volume = data.get('volume', 0)
-        return volume > volume_spike_threshold
+        if not data:
+            return False
+        volume_threshold = float(self.config.get('volume_spike_threshold', 5.0))
+        current_volume = float(data.get('volume', 0))
+        avg_volume = float(data.get('avg_volume', current_volume))
+        if avg_volume <= 0:
+            return False
+        return (current_volume / avg_volume) > volume_threshold
 
     def _load_state(self) -> None:
         """Load emergency state from persistence file."""
@@ -200,6 +254,7 @@ class EmergencyManager:
             raise
 
     async def emergency_shutdown(self) -> None:
+        """Initiate emergency shutdown."""
         self.emergency_mode = True
         self.position_limits = {}  # clear limits per tests’ expectations
         self._save_state()
@@ -263,20 +318,19 @@ class EmergencyManager:
             return False
 
     def get_system_health(self) -> Dict[str, Any]:
-        """Retrieve the current system health status."""
-        try:
-            health_status = {
-                "emergency_mode": self.emergency_mode,
-                "position_limits": {k: str(v) for k, v in self.position_limits.items()},
-                "exposure_percentages": {k: str(v / self.max_positions[k] * 100) for k, v in self.position_limits.items()},
-                "timestamp": datetime.now(timezone.utc).isoformat()
+        """Get current system health status."""
+        return {
+            'emergency_mode': self.emergency_mode,
+            'timestamp': datetime.now().isoformat(),
+            'position_limits': {k: str(v) for k, v in self.position_limits.items()},
+            'system_checks': {
+                'position_data': all(pair in self.max_positions for pair in self.position_limits),
+                'risk_limits': all(pair in self.risk_limits for pair in self.position_limits)
             }
-            return health_status
-        except Exception as e:
-            self.logger.error(f"Failed to get system health: {str(e)}")
-            return {}
+        }
 
     def update_position_limits(self, new_limits: Dict[str, Decimal]) -> None:
+        """Update position limits."""
         for k, v in new_limits.items():
             if v < 0:
                 raise ValueError("Negative limit not allowed")
@@ -285,7 +339,7 @@ class EmergencyManager:
         self._save_state()
 
     async def reset_emergency_state(self) -> None:
-        """Reset the emergency state to default values."""
+        """Reset emergency state to default values."""
         try:
             self.emergency_mode = False
             self.position_limits.clear()  # Clear the position limits
