@@ -7,7 +7,7 @@ import logging
 from typing import Dict, Optional, List, Union, Any
 from decimal import Decimal
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 class EmergencyManager:
     def __init__(self, config: Dict = None, state_file: str = "emergency_state.json"):
@@ -82,55 +82,76 @@ class EmergencyManager:
             self.logger.error(f"Failed to load emergency config: {str(e)}")
             raise
 
-    async def validate_new_position(self, trading_pair: str, size: float, price: float) -> bool:
-        """Validate if a new position can be taken based on system state and limits."""
+    async def validate_new_position(self, trading_pair: str, size: float, price: float, market_data: Optional[Dict] = None) -> bool:
         try:
-            if self.emergency_mode:
-                self.logger.warning("Position validation failed: System in emergency mode")
+            # Check for extreme price movements
+            if market_data and self._check_price_movement(market_data, price):
+                self.logger.warning(f"New position blocked for {trading_pair}: Extreme price movement")
                 return False
-
-            size_dec = Decimal(str(size))
-            price_dec = Decimal(str(price))
-            position_value = size_dec * price_dec
-
-            current_exposure = self.position_limits.get(trading_pair, Decimal('0'))
-            max_allowed = self.max_positions.get(trading_pair, Decimal('0'))
-
-            # Log validation values
-            self.logger.debug(f"""
-            Validating position:
-            Trading Pair: {trading_pair}
-            Size: {size_dec}
-            Price: {price_dec}
-            Position Value: {position_value}
-            Current Exposure: {current_exposure}
-            Max Allowed: {max_allowed}
-            """)
-
-            # Check against position limits
-            if current_exposure + position_value > max_allowed:  # Use position_value, not size_dec
-                self.logger.warning(f"Position validation failed: Would exceed position limit for {trading_pair}")
-                # Trigger Emergency Shutdown!
-                await self.emergency_shutdown()
+            # Check for volume spikes
+            if market_data and self._check_volume_spike(market_data):
+                self.logger.warning(f"New position blocked for {trading_pair}: Volume spike detected")
                 return False
-
-            # Check risk limits
-            risk_limit = self.risk_limits.get(trading_pair, Decimal('0'))
-            if position_value > risk_limit:
-                self.logger.warning(f"Position validation failed: Exceeds risk limit for {trading_pair}")
+            # Validate position size against risk limits
+            risk_limit = self.config.get("risk_limits", {}).get(trading_pair, float('inf'))
+            if size * price > risk_limit:
                 return False
-
-            # Check emergency thresholds
-            threshold = self.emergency_thresholds.get(trading_pair, Decimal('inf'))
-            if position_value > threshold:
-                self.logger.warning(f"Position validation failed: Would trigger emergency threshold for {trading_pair}")
-                return False
-
             return True
-
         except Exception as e:
-            self.logger.error(f"Position validation error: {str(e)}")
+            self.logger.error(f"Error validating new position for {trading_pair}: {e}")
             return False
+
+    async def trigger_emergency_shutdown(self, trading_pair: str, size: float, price: float) -> bool:
+        try:
+            self.logger.debug(f"Triggering emergency shutdown for {trading_pair} with size {size} and price {price}")
+            risk_limit = self.risk_limits.get(trading_pair, Decimal('inf'))
+            current_position = self.position_limits.get(trading_pair, Decimal('0'))
+            new_position_value = Decimal(str(size)) * Decimal(str(price))
+            total_position_value = current_position + new_position_value
+            
+            self.logger.debug(f"Calculated risk limit for {trading_pair}: {risk_limit}")
+            self.logger.debug(f"Current position: {current_position}")
+            self.logger.debug(f"New position value: {new_position_value}")
+            self.logger.debug(f"Total position value: {total_position_value}")
+            
+            if total_position_value > risk_limit:
+                self.emergency_mode = True
+                self._save_state()
+                self.logger.warning(f"Emergency shutdown triggered for {trading_pair}")
+                return True
+                
+            self.logger.debug(f"No emergency shutdown triggered for {trading_pair}")
+            return False
+        except Exception as e:
+            self.logger.error(f"Error triggering emergency shutdown for {trading_pair}: {e}")
+            return False
+
+    async def get_position(self, trading_pair: str) -> Dict[str, Any]:
+        try:
+            # Simulate getting position data
+            position = {
+                'size': Decimal('1.0'),
+                'entry_price': Decimal('50000.0'),
+                'unrealized_pnl': Decimal('1000.0'),
+                'stop_loss': Decimal('47500.0')
+            }
+            return position
+        except Exception as e:
+            self.logger.error(f"Error getting position for {trading_pair}: {e}")
+            return {}
+
+    def _check_price_movement(self, data: Dict, current_price: float) -> bool:
+        """Check for excessive price movement."""
+        price_change_threshold = self.emergency_thresholds.get('emergency_price_change_threshold', 0.1)
+        previous_price = data.get('price', current_price)
+        price_change = abs(current_price - previous_price) / previous_price
+        return price_change > price_change_threshold
+
+    def _check_volume_spike(self, data: Dict) -> bool:
+        """Check for volume spike."""
+        volume_spike_threshold = self.emergency_thresholds.get('volume_spike_threshold', 5.0)
+        volume = data.get('volume', 0)
+        return volume > volume_spike_threshold
 
     def _load_state(self) -> None:
         """Load emergency state from persistence file."""
@@ -161,7 +182,8 @@ class EmergencyManager:
             state = {
                 'emergency_mode': self.emergency_mode,
                 'position_limits': {k: str(v) for k, v in self.position_limits.items()},
-                'timestamp': datetime.utcnow().isoformat()
+                'timestamp': datetime.now(timezone.utc).isoformat(),
+                'reason': getattr(self, 'reason', None)
             }
             
             # Ensure directory exists
@@ -185,12 +207,6 @@ class EmergencyManager:
         return {'status': 'success'}
 
     async def restore_normal_operation(self) -> bool:
-        """
-        Attempt to restore system to normal operation mode.
-
-        Returns:
-            True if restoration successful, False otherwise
-        """
         try:
             if not self.emergency_mode:
                 return True
@@ -253,7 +269,7 @@ class EmergencyManager:
                 "emergency_mode": self.emergency_mode,
                 "position_limits": {k: str(v) for k, v in self.position_limits.items()},
                 "exposure_percentages": {k: str(v / self.max_positions[k] * 100) for k, v in self.position_limits.items()},
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             }
             return health_status
         except Exception as e:
@@ -268,7 +284,7 @@ class EmergencyManager:
             self.position_limits[k] = v
         self._save_state()
 
-    def reset_emergency_state(self) -> None:
+    async def reset_emergency_state(self) -> None:
         """Reset the emergency state to default values."""
         try:
             self.emergency_mode = False
@@ -287,4 +303,28 @@ class EmergencyManager:
             self.logger.info("All positions closed")
         except Exception as e:
             self.logger.error(f"Failed to close positions: {str(e)}")
+            raise
+
+    async def update_state(self, emergency_mode: bool, reason: str = None) -> None:
+        """Thread-safe state update with persistence."""
+        async with asyncio.Lock():
+            self.emergency_mode = emergency_mode
+            self.reason = reason
+            self._save_state()
+
+    async def recover_state(self) -> Dict[str, Any]:
+        """Recovers state from persistent storage."""
+        try:
+            if not self.state_file.exists():
+                return {}
+
+            async with asyncio.Lock():
+                with open(self.state_file, 'r') as f:
+                    state = json.load(f)
+                self.emergency_mode = state.get('emergency_mode', False)
+                self.position_limits = {k: Decimal(str(v)) for k, v in state.get('position_limits', {}).items()}
+                self.reason = state.get('reason', None)
+                return state
+        except Exception as e:
+            self.logger.error(f"State recovery failed: {e}")
             raise

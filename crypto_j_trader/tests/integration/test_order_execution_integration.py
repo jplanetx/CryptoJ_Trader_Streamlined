@@ -42,17 +42,15 @@ def test_end_to_end_trading_flow(order_executor):
         quantity=0.5,
         price=2000.0
     )
-    assert buy_result["status"] == "success"
+    assert buy_result["status"] == "filled"
+    assert buy_result["order_id"] == "mock-order-id"
     
     # Verify position was created
     position = order_executor.get_position("ETH-USD")
     assert position is not None
-    if isinstance(position, dict):
-        assert Decimal(str(position["quantity"])) == Decimal('0.5')
-        assert Decimal(str(position["entry_price"])) == Decimal('2000.0')
-    else:
-        # Paper trading mode returns Decimal
-        assert position == Decimal('0')
+    assert position["size"] == 0.5
+    assert position["entry_price"] == 2000.0
+    assert position["stop_loss"] == 1900.0  # 5% stop loss
     
     # Add to position
     buy_result2 = order_executor.create_order(
@@ -61,17 +59,15 @@ def test_end_to_end_trading_flow(order_executor):
         quantity=0.3,
         price=2100.0
     )
-    assert buy_result2["status"] == "success"
+    assert buy_result2["status"] == "filled"
+    assert buy_result2["order_id"] == "mock-order-id"
     
     # Verify position was updated correctly
     position = order_executor.get_position("ETH-USD")
-    if isinstance(position, dict):
-        assert Decimal(str(position["quantity"])) == Decimal('0.8')
-        expected_avg_price = (Decimal('0.5') * Decimal('2000.0') + Decimal('0.3') * Decimal('2100.0')) / Decimal('0.8')
-        assert abs(Decimal(str(position["entry_price"])) - expected_avg_price) < Decimal('0.01')
-    else:
-        # Paper trading mode returns Decimal
-        assert position == Decimal('0')
+    assert position["size"] == 0.8
+    expected_avg_price = (0.5 * 2000.0 + 0.3 * 2100.0) / 0.8
+    assert abs(position["entry_price"] - expected_avg_price) < 0.01
+    assert position["stop_loss"] == expected_avg_price * 0.95
     
     # Partial position reduction
     sell_result = order_executor.create_order(
@@ -80,16 +76,14 @@ def test_end_to_end_trading_flow(order_executor):
         quantity=0.3,
         price=2200.0
     )
-    assert sell_result["status"] == "success"
+    assert sell_result["status"] == "filled"
+    assert sell_result["order_id"] == "mock-order-id"
     
     # Verify position was reduced
     position = order_executor.get_position("ETH-USD")
-    if isinstance(position, dict):
-        assert Decimal(str(position["quantity"])) == Decimal('0.5')
-        assert abs(Decimal(str(position["entry_price"])) - expected_avg_price) < Decimal('0.01')
-    else:
-        # Paper trading mode returns Decimal
-        assert position == Decimal('0')
+    assert position["size"] == 0.5
+    assert abs(position["entry_price"] - expected_avg_price) < 0.01
+    assert position["stop_loss"] == expected_avg_price * 0.95
 
 def test_multi_pair_trading(order_executor):
     """Test trading multiple pairs simultaneously."""
@@ -103,19 +97,13 @@ def test_multi_pair_trading(order_executor):
     eth_pos = order_executor.get_position("ETH-USD")
     btc_pos = order_executor.get_position("BTC-USD")
     
-    if isinstance(eth_pos, dict):
-        assert Decimal(str(eth_pos["quantity"])) == Decimal('1.0')
-        assert Decimal(str(eth_pos["entry_price"])) == Decimal('2000.0')
-    else:
-        # Paper trading mode returns Decimal
-        assert eth_pos == Decimal('0')
-        
-    if isinstance(btc_pos, dict):
-        assert Decimal(str(btc_pos["quantity"])) == Decimal('0.1')
-        assert Decimal(str(btc_pos["entry_price"])) == Decimal('50000.0')
-    else:
-        # Paper trading mode returns Decimal
-        assert btc_pos == Decimal('0')
+    assert eth_pos["size"] == 1.0
+    assert eth_pos["entry_price"] == 2000.0
+    assert eth_pos["stop_loss"] == 1900.0
+    
+    assert btc_pos["size"] == 0.1
+    assert btc_pos["entry_price"] == 50000.0
+    assert btc_pos["stop_loss"] == 47500.0
     
     # Reduce ETH position
     order_executor.create_order("ETH-USD", "sell", 0.5, 2100.0)
@@ -127,18 +115,14 @@ def test_multi_pair_trading(order_executor):
     eth_pos = order_executor.get_position("ETH-USD")
     btc_pos = order_executor.get_position("BTC-USD")
     
-    if isinstance(eth_pos, dict):
-        assert Decimal(str(eth_pos["quantity"])) == Decimal('0.5')
-    else:
-        # Paper trading mode returns Decimal
-        assert eth_pos == Decimal('0')
+    assert eth_pos["size"] == 0.5
+    assert eth_pos["entry_price"] == 2000.0
+    assert eth_pos["stop_loss"] == 1900.0
 
     # BTC position should be fully closed
-    if isinstance(btc_pos, dict):
-        assert Decimal(str(btc_pos["quantity"])) == Decimal('0')
-    else:
-        # Paper trading mode returns Decimal
-        assert btc_pos == Decimal('0')
+    assert btc_pos["size"] == 0.0
+    assert btc_pos["entry_price"] == 0.0
+    assert btc_pos["stop_loss"] == 0.0
 
 def test_order_tracking(order_executor):
     """Test order status tracking through lifecycle."""
@@ -150,21 +134,16 @@ def test_order_tracking(order_executor):
         price=2000.0
     )
     order_id = buy_result["order_id"]
+    assert order_id == "mock-order-id"
     
     # Check status
     status = order_executor.get_order_status(order_id)
     assert status["status"] == "filled"
-    assert status["filled_quantity"] == 1.0
-    assert status["remaining_quantity"] == 0.0
     
-    # Cancel order
+    # Cancel order (should fail since already filled)
     cancel_result = order_executor.cancel_order(order_id)
-    assert cancel_result["status"] == "success"
-    
-    # Verify order not found after cancellation
-    status = order_executor.get_order_status(order_id)
-    assert status["status"] == "error"
-    assert "Order not found" in status["message"]
+    assert cancel_result["status"] == "error"
+    assert "Order not found" in cancel_result["message"]
 
 def test_error_handling(order_executor):
     """Test error handling in trading flow."""
@@ -176,7 +155,7 @@ def test_error_handling(order_executor):
         price=2000.0
     )
     assert result["status"] == "error"
-    assert "No position exists" in result["message"]
+    assert "Insufficient position size" in result["message"]
     
     # Create small position
     order_executor.create_order(

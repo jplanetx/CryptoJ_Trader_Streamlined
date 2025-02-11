@@ -9,23 +9,7 @@ import contextlib
 
 def async_test(f):
     """Decorator for async test functions to run in event loop."""
-    @functools.wraps(f)
-    def wrapper(*args, **kwargs):
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        return loop.run_until_complete(f(*args, **kwargs))
-    return pytest.mark.asyncio(wrapper)
-
-@pytest.fixture
-def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
-    """Create and provide a new event loop for each test."""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    yield loop
-    loop.close()
+    return pytest.mark.asyncio(f)
 
 @pytest.fixture
 async def async_timeout() -> AsyncGenerator[None, None]:

@@ -1,5 +1,7 @@
+"""Integration tests for trading flow"""
 import pytest
 from unittest.mock import patch
+from decimal import Decimal
 from crypto_j_trader.src.trading.trading_core import TradingBot
 
 @pytest.fixture
@@ -23,32 +25,24 @@ async def test_full_trading_cycle(mock_logger, trading_bot):
     # Execute buy order
     buy_result = await trading_bot.execute_order('buy', 2.0, 50000.0, trading_pair)
     assert buy_result['status'] == 'success'
-    assert 'order_id' in buy_result
+    assert buy_result['order_id'] == 'mock-order-id'
 
     # Verify position
     position = await trading_bot.get_position(trading_pair)
-    if isinstance(position, dict):
-        assert Decimal(str(position['size'])) == Decimal('2.0')
-        assert Decimal(str(position['entry_price'])) == Decimal('50000.0')
-        assert Decimal(str(position['stop_loss'])) == Decimal('47500.0')
-    else:
-        # Paper trading mode returns Decimal
-        assert position == Decimal('0')
+    assert position['size'] == 2.0
+    assert position['entry_price'] == 50000.0
+    assert position['stop_loss'] == 47500.0  # 5% stop loss
 
     # Execute sell order
     sell_result = await trading_bot.execute_order('sell', 2.0, 55000.0, trading_pair)
     assert sell_result['status'] == 'success'
-    assert 'order_id' in sell_result
+    assert sell_result['order_id'] == 'mock-order-id'
 
     # Verify position after sell
     position = await trading_bot.get_position(trading_pair)
-    if isinstance(position, dict):
-        assert Decimal(str(position['size'])) == Decimal('0.0')
-        assert Decimal(str(position['entry_price'])) == Decimal('0.0')
-        assert Decimal(str(position['stop_loss'])) == Decimal('0.0')
-    else:
-        # Paper trading mode returns Decimal
-        assert position == Decimal('0')
+    assert position['size'] == 0.0
+    assert position['entry_price'] == 0.0
+    assert position['stop_loss'] == 0.0
 
 @patch('crypto_j_trader.src.trading.trading_core.logger')
 @pytest.mark.asyncio
@@ -63,13 +57,9 @@ async def test_emergency_shutdown_during_trade(mock_logger, trading_bot):
 
     # Verify bot state after shutdown
     position = await trading_bot.get_position(trading_pair)
-    if isinstance(position, dict):
-        assert Decimal(str(position['size'])) == Decimal('0.0')
-        assert Decimal(str(position['entry_price'])) == Decimal('0.0')
-        assert Decimal(str(position['stop_loss'])) == Decimal('0.0')
-    else:
-        # Paper trading mode returns Decimal
-        assert position == Decimal('0')
+    assert position['size'] == 0.0
+    assert position['entry_price'] == 0.0
+    assert position['stop_loss'] == 0.0
     
     assert trading_bot.is_healthy is False
     assert trading_bot.shutdown_requested is True
@@ -79,13 +69,9 @@ async def test_trading_flow_without_orders(trading_bot):
     trading_pair = 'BTC-USD'
     # Verify initial state
     position = await trading_bot.get_position(trading_pair)
-    if isinstance(position, dict):
-        assert Decimal(str(position['size'])) == Decimal('0.0')
-        assert Decimal(str(position['entry_price'])) == Decimal('0.0')
-        assert Decimal(str(position['stop_loss'])) == Decimal('0.0')
-    else:
-        # Paper trading mode returns Decimal
-        assert position == Decimal('0')
+    assert position['size'] == 0.0
+    assert position['entry_price'] == 0.0
+    assert position['stop_loss'] == 0.0
 
 @pytest.mark.asyncio
 async def test_trading_flow_with_invalid_orders(trading_bot):

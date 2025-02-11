@@ -21,9 +21,6 @@ from .utils import (
 
 def pytest_configure(config):
     """Configure pytest with custom settings and markers."""
-    # Set asyncio mode to strict
-    config.option.asyncio_mode = "strict"
-    
     # Register custom markers
     config.addinivalue_line("markers", "unit: Unit tests")
     config.addinivalue_line("markers", "integration: Integration tests")
@@ -32,14 +29,6 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "api: Tests that interact with the Coinbase API")
     config.addinivalue_line("markers", "websocket: Tests for websocket functionality")
     config.addinivalue_line("markers", "paper_trading: Tests for paper trading mode")
-
-@pytest.fixture(scope="function")
-def event_loop():
-    """Create an instance of the default event loop for each test function."""
-    import asyncio
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
 
 @pytest.fixture(autouse=True)
 def test_timeout():
@@ -112,7 +101,6 @@ __all__ = [
     'test_timeout',
     'mock_response_factory',
     'performance_thresholds',
-    'event_loop',
     'test_config_path',
     'emergency_config'
 ]

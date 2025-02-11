@@ -7,12 +7,11 @@ import os
 import logging
 import json
 from typing import Dict
-from coinbase.rest import RESTClient
-# from trading.trading_core import TradingCore # Removed TradingCore
-from trading.risk_management import RiskManager
-from trading.paper_trading import PaperTrader
-from trading.order_executor import OrderExecutor
-from trading.market_data_handler import MarketDataHandler
+from coinbase.wallet.client import Client as RESTClient
+from crypto_j_trader.src.trading.risk_management import RiskManager
+from crypto_j_trader.src.trading.paper_trading import PaperTrader
+from crypto_j_trader.src.trading.order_executor import OrderExecutor
+from crypto_j_trader.src.trading.market_data_handler import MarketDataHandler
 
 # Configure logging
 logging.basicConfig(
@@ -30,7 +29,6 @@ class TradingBot:
         """Initialize minimal trading bot"""
         self.config = self._load_config(config_path)
         self.client = self._setup_client()
-        # self.trading_core = TradingCore(self.client, self.config['trading_pair']) # Removed TradingCore
         self.risk_manager = RiskManager(self.config['risk'])
         self.market_data_handler = MarketDataHandler(self.client, self.config['trading_pair'])
         self.order_executor = OrderExecutor(self.client)

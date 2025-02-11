@@ -2,8 +2,7 @@
 Core trading functionality implementation
 """
 from datetime import datetime
-from typing import Dict, Any, Optional
-import asyncio
+from typing import Dict, Any, Optional, Union
 import logging
 from decimal import Decimal
 import json
@@ -31,12 +30,9 @@ class TradingBot:
         
         # Use proper dummy order executor if none provided
         if self.order_executor is None:
-            class DummyOrderExecutor:
-                async def create_order(self, symbol, side, size, price):
-                    return {'id': 'dummy_order'}
-                async def get_position(self, symbol):
-                    return {'quantity': 0, 'entry_price': 0}
-            self.order_executor = DummyOrderExecutor()
+            from .order_execution import OrderExecutor
+            self.order_executor = OrderExecutor(trading_pair=trading_pair or "BTC-USD")
+        
         if self.market_data_handler is None:
             # Use a dummy MarketDataHandler that implements both update_price and get_current_price.
             class DummyMarketDataHandler:
@@ -77,89 +73,124 @@ class TradingBot:
     def get_position(self, symbol: str) -> Dict[str, float]:
         """Get current position for a symbol."""
         if symbol not in self.positions:
-            self.positions[symbol] = {
-                'size': 0.0,
-                'entry_price': 0.0,
-                'unrealized_pnl': 0.0,
-                'stop_loss': 0.0
+            # Return empty position
+            return {
+                "size": 0.0,
+                "entry_price": 0.0,
+                "stop_loss": 0.0
             }
-        return self.positions[symbol].copy()
+
+        pos = self.positions[symbol]
+        # Handle both dict and Decimal position formats
+        if isinstance(pos, dict):
+            return pos
+        else:
+            # Convert Decimal to dict format
+            return {
+                "size": float(pos),
+                "entry_price": float(self.market_prices.get(symbol, 0)),
+                "stop_loss": float(self.market_prices.get(symbol, 0) * Decimal("0.95"))
+            }
 
     async def execute_order(self, side: str, size: float, price: float, symbol: str) -> dict:
-        if size <= 0 or price <= 0:
-            return {'status': 'error', 'message': 'Invalid size or price'}
-        
+        """Execute a trade order."""
+        # Validate parameters
+        if size <= 0:
+            return {'status': 'error', 'message': 'Invalid size'}
+        if price <= 0:
+            return {'status': 'error', 'message': 'Invalid price'}
+
+        # Check position limits
+        max_size = self.config.get('risk_management', {}).get('max_position_size', float('inf'))
         position = self.get_position(symbol)
-        # Always use paper trading mode by instantiating the simplified OrderExecutor
-        from .order_execution import OrderExecutor
-        self.order_executor = OrderExecutor(trading_pair=symbol)
+        new_size = abs(position['size'] + (size if side == 'buy' else -size))
+        
+        if new_size > max_size:
+            return {'status': 'error', 'message': 'position size limit exceeded'}
+
+        # Check daily loss limit
+        max_daily_loss = self.config.get('risk_management', {}).get('max_daily_loss', float('inf'))
+        if abs(self.daily_loss) > max_daily_loss:
+            return {'status': 'error', 'message': 'daily loss limit exceeded'}
 
         try:
-            order = await self.order_executor.create_order(
-                symbol, side, Decimal(str(size)), Decimal(str(price))
+            result = await self.order_executor.execute_order(
+                side=side,
+                size=size,
+                price=price,
+                symbol=symbol
             )
-            # Simplified position update:
-            if side.lower() == 'buy':
-                position['size'] += size
-                position['entry_price'] = price
-            else:
-                position['size'] -= size
-            self.positions[symbol] = position
-            return {'status': 'success', 'order_id': order.get('order_id')}
+            
+            if result['status'] == 'filled':
+                # Update market price and position
+                self.market_prices[symbol] = price
+                
+                # Update position using dict format
+                curr_pos = self.get_position(symbol)
+                size_dec = Decimal(str(size))
+                if side == 'buy':
+                    new_size = curr_pos['size'] + float(size_dec)
+                else:
+                    new_size = curr_pos['size'] - float(size_dec)
+                
+                self.positions[symbol] = {
+                    'size': new_size,
+                    'entry_price': price,
+                    'stop_loss': price * 0.95 if new_size > 0 else 0.0
+                }
+                
+                # Update daily stats
+                self.daily_stats['trades'] += 1
+                self.daily_stats['volume'] += size * price
+
+                # Map 'filled' to 'success' for consistency
+                result['status'] = 'success'
+
+            return result
+
+        except ValueError as e:
+            # Propagate validation errors
+            return {'status': 'error', 'message': str(e)}
         except Exception as e:
+            logger.error(f"Order execution failed: {str(e)}")
             return {'status': 'error', 'message': str(e)}
 
     async def check_positions(self):
         """Check all positions for stop loss/take profit triggers."""
-        # Iterate over a copy of the symbols to avoid runtime error
         for symbol in list(self.positions.keys()):
-            position = self.positions[symbol]
-            current_price = self.market_prices.get(symbol)
-            if not current_price:
+            position = self.get_position(symbol)
+            if position['size'] == 0:
                 continue
-
-            if position['stop_loss'] > 0:
-                if (position['size'] > 0 and current_price <= position['stop_loss']) or \
-                   (position['size'] < 0 and current_price >= position['stop_loss']):
-                    await self.execute_order(
-                        'sell' if position['size'] > 0 else 'buy',
-                        abs(position['size']),
-                        current_price,
-                        symbol
-                    )
+                
+            current_price = self.market_prices.get(symbol, position['entry_price'])
+            
+            # Check stop loss
+            if position['size'] > 0 and current_price <= position['stop_loss']:
+                await self.execute_order('sell', position['size'], current_price, symbol)
+            elif position['size'] < 0 and current_price >= position['stop_loss']:
+                await self.execute_order('buy', abs(position['size']), current_price, symbol)
 
     async def update_market_price(self, symbol: str, price: float):
         """Update current market price and check stops."""
         self.market_prices[symbol] = price
-        position = self.positions.get(symbol, {})
-        
-        # Update unrealized PnL
-        if position.get('size', 0) != 0:
-            position['unrealized_pnl'] = (
-                (price - position['entry_price']) * position['size']
-                if position['size'] > 0
-                else (position['entry_price'] - price) * abs(position['size'])
-            )
-
-        if self.market_data_handler:
-            await self.market_data_handler.update_price(symbol)
-
         await self.check_positions()
 
     async def emergency_shutdown(self):
+        """Execute emergency shutdown procedure."""
         logger.warning("Initiating emergency shutdown")
+        self.shutdown_requested = True
+        
         # Close all positions
         for symbol in list(self.positions.keys()):
-            if self.positions[symbol]['size'] != 0:
-                current_price = self.market_prices.get(symbol, self.positions[symbol]['entry_price'])
+            position = self.get_position(symbol)
+            if position['size'] != 0:
                 await self.execute_order(
-                    'sell' if self.positions[symbol]['size'] > 0 else 'buy',
-                    abs(self.positions[symbol]['size']),
-                    current_price,
+                    'sell' if position['size'] > 0 else 'buy',
+                    abs(position['size']),
+                    self.market_prices.get(symbol, position['entry_price']),
                     symbol
                 )
-                del self.positions[symbol]
-        self.shutdown_requested = True
+                
         self.is_healthy = False
         return {'status': 'success'}
 

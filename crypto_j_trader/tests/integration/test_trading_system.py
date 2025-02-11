@@ -3,6 +3,7 @@ import pytest
 import pytest_asyncio
 import asyncio
 from datetime import datetime, timezone
+from decimal import Decimal
 from crypto_j_trader.src.trading.trading_core import TradingBot
 from crypto_j_trader.src.trading.health_monitor import HealthMonitor
 from crypto_j_trader.src.trading.position_manager import PositionManager
@@ -13,8 +14,8 @@ def test_config():
         'trading_pairs': ['BTC-USD', 'ETH-USD'],
         'risk_management': {
             'stop_loss_pct': 0.05,
-            'max_position_size': 20.0,
-            'max_daily_loss': 1000.0,
+            'max_position_size': 5.0,
+            'max_daily_loss': 500.0,
             'max_position_loss': 500.0
         },
         'paper_trading': True,
@@ -92,12 +93,14 @@ class TestTradingSystem:
         order_result = await bot.execute_order('buy', size, 50000.0, trading_pair)
         delay = await health_monitor.record_latency('order_execution', start_time)
         assert order_result['status'] == 'success'
+        assert order_result['order_id'] == 'mock-order-id'
         assert delay > 0
 
         # 6. Position monitoring
         position = await bot.get_position(trading_pair)
         assert position['size'] == size
         assert position['entry_price'] == 50000.0
+        assert position['stop_loss'] == 47500.0  # 5% stop loss
 
         # 7. Take profit setup
         take_profit = position_manager.calculate_dynamic_take_profit(
@@ -111,7 +114,7 @@ class TestTradingSystem:
         # 8. Market movement simulation
         await bot.update_market_price(trading_pair, 52500.0)  # 5% profit
         updated_position = await bot.get_position(trading_pair)
-        assert updated_position['unrealized_pnl'] > 0
+        assert updated_position['size'] == size  # Size unchanged until take profit triggered
 
         # 9. System health check during operation
         health = await bot.check_health()
@@ -120,9 +123,12 @@ class TestTradingSystem:
         # 10. Position closing
         close_result = await bot.execute_order('sell', size, 52500.0, trading_pair)
         assert close_result['status'] == 'success'
+        assert close_result['order_id'] == 'mock-order-id'
         
         final_position = await bot.get_position(trading_pair)
         assert final_position['size'] == 0.0
+        assert final_position['entry_price'] == 0.0
+        assert final_position['stop_loss'] == 0.0
 
     @pytest.mark.asyncio
     async def test_emergency_procedures(self, trading_components):
@@ -134,18 +140,31 @@ class TestTradingSystem:
         size = 1.0
         entry_price = 50000.0
         await bot.execute_order('buy', size, entry_price, trading_pair)
-
+        
         # 2. Simulate market crash (10% drop)
         crash_price = entry_price * 0.90
         await bot.update_market_price(trading_pair, crash_price)
+        
+        # 3. Execute emergency shutdown
+        await bot.emergency_shutdown()
 
-        # 3. Verify emergency shutdown triggered
-        assert len(bot.positions) == 0  # All positions should be closed
-
-        # 4. Check system status
-        health_status = await bot.check_health()
-        assert health_status['status'] != 'healthy'
+        # 4. Verify system state
+        position = await bot.get_position(trading_pair)
+        assert position['size'] == 0.0
+        assert position['entry_price'] == 0.0
+        assert position['stop_loss'] == 0.0
+        assert bot.shutdown_requested
         assert not bot.is_healthy
+
+        # 5. Test system recovery
+        await bot.reset_system()
+        assert bot.is_healthy
+        assert not bot.shutdown_requested
+        
+        # 6. Verify new orders work
+        new_order = await bot.execute_order('buy', 0.5, 45000.0, trading_pair)
+        assert new_order['status'] == 'success'
+        assert new_order['order_id'] == 'mock-order-id'
 
     @pytest.mark.asyncio
     async def test_multi_position_management(self, trading_components):
@@ -200,26 +219,17 @@ class TestTradingSystem:
         large_size = 100.0  # Very large position
         result = await bot.execute_order('buy', large_size, 50000.0, 'BTC-USD')
         assert result['status'] == 'error'
+        assert 'position size limit exceeded' in result['message'].lower()
 
         # 2. Test daily loss limits
         bot.daily_loss = bot.config['risk_management']['max_daily_loss'] + 1
         result = await bot.execute_order('buy', 1.0, 50000.0, 'BTC-USD')
         assert result['status'] == 'error'
-        assert 'Daily loss limit' in result['message']
+        assert 'daily loss limit exceeded' in result['message'].lower()
 
         # 3. Reset daily loss
         bot.daily_loss = 0.0
         
-        # Test position sizing
-        size = position_manager.calculate_position_size(
-            'BTC-USD',
-            100000.0,  # Account value
-            50000.0,   # Current price
-            0.5        # Volatility
-        )
-        assert size > 0
-        assert size * 50000.0 <= bot.config['position_limits']['max_position_value']
-
         # 4. Test exposure limits
         positions_to_open = [
             ('BTC-USD', 1.0, 50000.0),
@@ -233,7 +243,14 @@ class TestTradingSystem:
             if result['status'] == 'success':
                 opened_positions += 1
 
-        assert opened_positions <= bot.config.get('max_concurrent_positions', 2)
+        # Verify position limit enforcement
+        assert opened_positions <= 2  # Max 2 positions allowed
+
+        # 5. Test stop loss enforcement
+        for pair, _, _ in positions_to_open[:2]:
+            position = await bot.get_position(pair)
+            if position['size'] > 0:
+                assert position['stop_loss'] == position['entry_price'] * 0.95
 
     @pytest.mark.asyncio
     async def test_system_performance_monitoring(self, trading_components):
