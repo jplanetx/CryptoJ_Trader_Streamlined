@@ -23,6 +23,7 @@ class OrderExecutor:
     """Handles order execution and position tracking"""
     
     def __init__(self, *args, **kwargs):
+        from .trading_core import validate_trading_pair
         # Extract trading_pair from positional or keyword argument
         self.trading_pair = None
         if args:
@@ -33,6 +34,8 @@ class OrderExecutor:
         if "trading_pair" in kwargs:
             self.trading_pair = kwargs.pop("trading_pair")
             
+        if self.trading_pair and not validate_trading_pair(self.trading_pair):
+            raise ValueError(f"Invalid trading pair format: {self.trading_pair}")
         if not self.trading_pair:
             raise ValueError("Trading pair must be specified in the constructor")
             

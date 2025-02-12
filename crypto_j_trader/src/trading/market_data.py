@@ -36,7 +36,11 @@ class MarketDataService:
             self.logger.error(f"Error initializing price history: {str(e)}")
             raise
 
+    from .trading_core import validate_trading_pair
+
     async def get_recent_prices(self, trading_pair: str) -> List[float]:
+        if not validate_trading_pair(trading_pair):
+            raise ValueError(f"Invalid trading pair format: {trading_pair}")
         """
         Get recent price history for a trading pair.
 

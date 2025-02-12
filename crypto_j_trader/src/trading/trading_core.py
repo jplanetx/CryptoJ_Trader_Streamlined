@@ -12,6 +12,12 @@ logger = logging.getLogger(__name__)
 # Add module-level attribute for patching
 MarketDataHandler = None  # Allows tests to patch TradingCore.MarketDataHandler
 
+def validate_trading_pair(trading_pair: str) -> bool:
+    """Validate trading pair format (e.g., 'BTC-USD')."""
+    import re
+    pattern = re.compile(r'^[A-Z]{3,5}-[A-Z]{3,5}$')
+    return bool(pattern.match(trading_pair))
+
 class TradingBot:
     def __init__(self,
                  config: Dict[str, Any],
@@ -54,7 +60,9 @@ class TradingBot:
             'pnl': 0.0
         }
         self._init_from_config()
-        # Use provided trading pair or default from config or fallback to "BTC-USD"
+        # Validate and use provided trading pair or default from config or fallback to "BTC-USD"
+        if trading_pair and not validate_trading_pair(trading_pair):
+            raise ValueError(f"Invalid trading pair format: {trading_pair}")
         if trading_pair:
             self.trading_pair = trading_pair
         elif self.trading_pairs:
@@ -70,10 +78,33 @@ class TradingBot:
         if not self.trading_pairs:
             self.trading_pairs = self.config.get('trading', {}).get('symbols', [])
 
-    def get_position(self, symbol: str) -> Dict[str, float]:
-        """Get current position for a symbol."""
+    async def update_price(self, symbol: str, price: float):
+        """Update price for a symbol."""
+        if self.market_data_handler:
+            await self.market_data_handler.update_price(symbol)
+            self.market_prices[symbol] = price
+
+    async def validate_order(self, symbol: str, side: str, size: float, price: float) -> bool:
+        """Validate order parameters."""
+        if not validate_trading_pair(symbol):
+            return False
+        if side not in ['buy', 'sell']:
+            return False
+        if size <= 0 or price <= 0:
+            return False
+        return True
+
+    async def get_current_price(self, symbol: str) -> float:
+        """Get current price for a symbol."""
+        if symbol in self.market_prices:
+            return self.market_prices[symbol]
+        elif self.market_data_handler:
+            return self.market_data_handler.get_current_price(symbol)
+        return 0.0
+
+    async def get_position(self, symbol: str) -> Dict[str, float]:
+        """Get current position for a symbol.""" 
         if symbol not in self.positions:
-            # Return empty position
             return {
                 "size": 0.0,
                 "entry_price": 0.0,
@@ -102,7 +133,7 @@ class TradingBot:
 
         # Check position limits
         max_size = self.config.get('risk_management', {}).get('max_position_size', float('inf'))
-        position = self.get_position(symbol)
+        position = await self.get_position(symbol)  # Fix: Await the coroutine
         new_size = abs(position['size'] + (size if side == 'buy' else -size))
         
         if new_size > max_size:
@@ -126,7 +157,7 @@ class TradingBot:
                 self.market_prices[symbol] = price
                 
                 # Update position using dict format
-                curr_pos = self.get_position(symbol)
+                curr_pos = await self.get_position(symbol)  # Fix: Await the coroutine
                 size_dec = Decimal(str(size))
                 if side == 'buy':
                     new_size = curr_pos['size'] + float(size_dec)
@@ -158,8 +189,8 @@ class TradingBot:
     async def check_positions(self):
         """Check all positions for stop loss/take profit triggers."""
         for symbol in list(self.positions.keys()):
-            position = self.get_position(symbol)
-            if position['size'] == 0:
+            position = await self.get_position(symbol)  # Fix: Await the coroutine
+            if position and position['size'] == 0:
                 continue
                 
             current_price = self.market_prices.get(symbol, position['entry_price'])
@@ -182,8 +213,8 @@ class TradingBot:
         
         # Close all positions
         for symbol in list(self.positions.keys()):
-            position = self.get_position(symbol)
-            if position['size'] != 0:
+            position = await self.get_position(symbol)
+            if position and position['size'] != 0:
                 await self.execute_order(
                     'sell' if position['size'] > 0 else 'buy',
                     abs(position['size']),

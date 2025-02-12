@@ -81,7 +81,11 @@ class RiskManager:
         # Default absolute tolerance check.
         return abs(value - target) <= (target * self.position_tolerance * tolerance_multiplier)
 
+    from .trading_core import validate_trading_pair
+
     async def assess_risk(self, price: Decimal, trading_pair: str, size: Decimal) -> bool:
+        if not validate_trading_pair(trading_pair):
+            raise ValueError(f"Invalid trading pair format: {trading_pair}")
         """Assess risk based on position value, volatility, and market conditions."""
         position_value = price * size
         if position_value > self.max_position_value:
