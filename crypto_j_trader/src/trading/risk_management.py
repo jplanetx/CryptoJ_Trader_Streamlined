@@ -19,6 +19,12 @@ RISK_THRESHOLD_ERROR = "Risk threshold exceeded"
 
 logger = logging.getLogger(__name__)
 
+def validate_trading_pair(trading_pair: str) -> bool:
+    """Validate trading pair format (e.g., 'BTC-USD')."""
+    import re
+    pattern = re.compile(r'^[A-Z]{3,5}-[A-Z]{3,5}$')
+    return bool(pattern.match(trading_pair))
+
 class RiskManager:
     def __init__(self, risk_threshold: float, market_data_service: Optional[MarketDataService] = None) -> None:
         self.risk_threshold = Decimal(str(risk_threshold))

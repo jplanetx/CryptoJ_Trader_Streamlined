@@ -1,6 +1,15 @@
 {
   "emergency_mode": true,
-  "position_limits": {},
-  "timestamp": "2025-02-11T18:44:00.105109+00:00",
-  "reason": null
+  "position_limits": {
+    "BTC-USD": "-1.0"
+  },
+  "system_health_checks": {
+    "data_freshness": true,
+    "websocket_health": true,
+    "position_manager": true,
+    "order_executor": true
+  },
+  "timestamp": "2025-02-12T22:05:13.065807+00:00",
+  "reason": null,
+  "hash": "51a5c6725ea4ca6b2378ff5875d451e717fde93f867cc316510192b054d16440"
 }

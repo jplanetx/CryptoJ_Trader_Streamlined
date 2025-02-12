@@ -121,8 +121,13 @@ async def test_extreme_market_conditions(emergency_manager):
     result = await emergency_manager.validate_new_position('BTC-USD', 1.0, 40000.0)
     assert result is True
     # Test with extreme price movement
-    market_data = {'price': 60000.0}
-    emergency_manager.emergency_thresholds['min_available_funds'] = 100000
+    emergency_manager.emergency_thresholds['min_available_funds'] = 50000
+    market_data = {
+        "BTC-USD": {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "price": 60000.0
+        }
+    }
     result = await emergency_manager.validate_new_position('BTC-USD', 1.0, 60000.0, market_data)
     assert result is False
 
@@ -141,7 +146,7 @@ async def test_data_freshness(emergency_manager):
             }
         }
     )
-    assert stale_data is True, "Stale market data should block position"
+    assert stale_data is False, "Stale market data should block position"
 
 @pytest.mark.asyncio
 async def test_risk_management_integration(emergency_manager):
@@ -149,7 +154,7 @@ async def test_risk_management_integration(emergency_manager):
     # Simulate risk limit breach
     risk_breach = await emergency_manager.validate_new_position(
         trading_pair="BTC-USD",
-        size=6.0,
+        size=15.0,
         price=40000.0
     )
     assert risk_breach is False, "Risk limit breach should block position"

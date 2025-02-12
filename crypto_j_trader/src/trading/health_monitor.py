@@ -3,7 +3,7 @@ import logging
 import time
 import psutil
 from typing import Dict, Optional, List, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import json
 from pathlib import Path
@@ -30,13 +30,13 @@ class HealthMonitor:
             'error_rate': Decimal('0'),
             'memory_usage': Decimal('0'),
             'cpu_usage': Decimal('0'),
-            'last_heartbeat': datetime.utcnow(),
             'api_errors': 0,
-            'total_requests': 0
+            'total_requests': 0,
+            'last_heartbeat': datetime.now(timezone.utc)
         }
-        self.status_history: List[Dict] = []
+        self.status_history = []
         self.alert_count = 0
-        self.last_check = datetime.utcnow()
+        self.last_check = datetime.now(timezone.utc)
 
     def _load_metrics_history(self) -> None:
         """Load historical metrics from file."""
@@ -54,20 +54,12 @@ class HealthMonitor:
     def _save_metrics_history(self) -> None:
         """Save metrics history to file."""
         try:
-            # Ensure directory exists
-            self.metrics_file.parent.mkdir(parents=True, exist_ok=True)
-            
-            data = {
+            metrics_data = {
                 'status_history': self.status_history,
-                'last_updated': datetime.utcnow().isoformat()
+                'last_updated': datetime.now(timezone.utc).isoformat()
             }
-            
-            # Atomic write operation
-            temp_file = self.metrics_file.with_suffix('.tmp')
-            with open(temp_file, 'w') as f:
-                json.dump(data, f, indent=2, default=str)
-            temp_file.replace(self.metrics_file)
-            
+            with open(self.metrics_file, 'w') as f:
+                json.dump(metrics_data, f, indent=2)
         except Exception as e:
             self.logger.error(f"Failed to save metrics history: {str(e)}")
 
@@ -79,7 +71,7 @@ class HealthMonitor:
             Dict[str, Any]: Health check results
         """
         try:
-            current_time = datetime.utcnow()
+            current_time = datetime.now(timezone.utc)
             
             # Calculate metrics
             avg_latency = self._calculate_average_latency()
@@ -87,19 +79,10 @@ class HealthMonitor:
             memory_usage = await self._check_memory_usage()
             cpu_usage = await self._check_cpu_usage()
             
-            # Update metrics
-            self.metrics.update({
-                'latency': self.metrics['latency'][-100:],  # Keep last 100 measurements
-                'error_rate': error_rate,
-                'memory_usage': memory_usage,
-                'cpu_usage': cpu_usage,
-                'last_heartbeat': current_time
-            })
-            
             # Calculate health status
             status = self._evaluate_health_status()
             
-            # Prepare metrics for storage
+            # Prepare metrics record
             metrics_record = {
                 'timestamp': current_time.isoformat(),
                 'status': status,
@@ -111,11 +94,11 @@ class HealthMonitor:
                 }
             }
             
-            # Update status history
+            # Update metrics history
             self.status_history.append(metrics_record)
-            self.status_history = self.status_history[-1000:]
+            self.status_history = self.status_history[-1000:]  # Keep last 1000 records
             
-            # Save updated metrics
+            # Save metrics history
             self._save_metrics_history()
             
             return {
@@ -130,7 +113,7 @@ class HealthMonitor:
             return {
                 'status': 'error',
                 'error': str(e),
-                'timestamp': datetime.utcnow().isoformat()
+                'timestamp': datetime.now(timezone.utc).isoformat()
             }
 
     def _evaluate_health_status(self) -> str:
@@ -142,21 +125,23 @@ class HealthMonitor:
         """
         try:
             avg_latency = self._calculate_average_latency()
+            error_rate = self._calculate_error_rate()
             
-            # Check against thresholds
-            if (avg_latency > Decimal(str(self.thresholds['critical_latency'])) or
-                self.metrics['error_rate'] > Decimal(str(self.thresholds['critical_error_rate'])) or
-                self.metrics['memory_usage'] > Decimal(str(self.thresholds['critical_memory'])) or
-                self.metrics['cpu_usage'] > Decimal(str(self.thresholds['critical_cpu']))):
+            # Check critical thresholds first
+            if (avg_latency >= Decimal(str(self.thresholds['critical_latency'])) or
+                error_rate >= Decimal(str(self.thresholds['critical_error_rate'])) or
+                self.metrics['memory_usage'] >= Decimal(str(self.thresholds['critical_memory'])) or
+                self.metrics['cpu_usage'] >= Decimal(str(self.thresholds['critical_cpu']))):
                 self.alert_count += 1
                 return 'critical'
                 
-            if (avg_latency > Decimal(str(self.thresholds['warning_latency'])) or
-                self.metrics['error_rate'] > Decimal(str(self.thresholds['warning_error_rate'])) or
-                self.metrics['memory_usage'] > Decimal(str(self.thresholds['warning_memory'])) or
-                self.metrics['cpu_usage'] > Decimal(str(self.thresholds['warning_cpu']))):
+            # Then check warning thresholds
+            if (avg_latency >= Decimal(str(self.thresholds['warning_latency'])) or
+                error_rate >= Decimal(str(self.thresholds['warning_error_rate'])) or
+                self.metrics['memory_usage'] >= Decimal(str(self.thresholds['warning_memory'])) or
+                self.metrics['cpu_usage'] >= Decimal(str(self.thresholds['warning_cpu']))):
                 return 'warning'
-                
+            
             return 'healthy'
             
         except Exception as e:
@@ -242,7 +227,7 @@ class HealthMonitor:
 
     async def record_error(self, error_type: str) -> None:
         """
-        Record an API or system error.
+        Record an API error occurrence.
 
         Args:
             error_type (str): Type of error encountered
@@ -250,17 +235,20 @@ class HealthMonitor:
         try:
             self.metrics['api_errors'] += 1
             self.metrics['total_requests'] += 1
-            
-            # Calculate new error rate
             error_rate = self._calculate_error_rate()
             
-            # Log if error rate exceeds warning threshold
-            if error_rate > self.thresholds['warning_error_rate']:
+            if error_rate > Decimal(str(self.thresholds['warning_error_rate'])):
                 self.logger.warning(f"High error rate detected: {float(error_rate)}%")
+                self.logger.warning(f"Error recorded: {error_type}")
                 
-            self.logger.warning(f"Error recorded: {error_type}")
         except Exception as e:
             self.logger.error(f"Error recording error: {str(e)}")
+            
+        # Check health status after recording error
+        try:
+            await self.check_health()
+        except Exception as e:
+            self.logger.error(f"Health check after error failed: {str(e)}")
 
     def get_health_history(self, hours: int = 24) -> List[Dict]:
         """
@@ -273,10 +261,11 @@ class HealthMonitor:
             List[Dict]: List of historical health status records
         """
         try:
-            cutoff = datetime.utcnow() - timedelta(hours=hours)
+            current_time = datetime.now(timezone.utc)
+            cutoff = current_time - timedelta(hours=hours)
             return [
                 status for status in self.status_history
-                if datetime.fromisoformat(status['timestamp']) > cutoff
+                if datetime.fromisoformat(status['timestamp']).replace(tzinfo=timezone.utc) > cutoff
             ]
         except Exception as e:
             self.logger.error(f"Health history retrieval error: {str(e)}")

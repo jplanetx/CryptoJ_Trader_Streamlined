@@ -2,6 +2,7 @@ from typing import List, Optional, Dict, Any
 import logging
 import json
 import asyncio
+from .trading_core import validate_trading_pair
 
 class MarketDataService:
     """
@@ -35,8 +36,6 @@ class MarketDataService:
         except Exception as e:
             self.logger.error(f"Error initializing price history: {str(e)}")
             raise
-
-    from .trading_core import validate_trading_pair
 
     async def get_recent_prices(self, trading_pair: str) -> List[float]:
         if not validate_trading_pair(trading_pair):

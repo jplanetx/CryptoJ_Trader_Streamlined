@@ -168,28 +168,33 @@ class TestEmergencyMarketDataIntegration:
         )
         assert result is False, "Should reject high volume position"
 
-    async def test_emergency_shutdown_procedure(self, market_data_config, emergency_config, mock_websocket_handler):
-        """Test complete emergency shutdown process"""
+    @pytest.mark.asyncio
+    async def test_emergency_shutdown_procedure(self, market_data_config, emergency_config, mock_websocket_handler, reset_emergency_manager):
+        """Test emergency shutdown procedure."""
         market_data = MockMarketData(market_data_config)
         market_data._ws_handler = mock_websocket_handler(market_data_config)
         emergency_manager = EmergencyManager(emergency_config)
+        reset_emergency_manager(emergency_manager)
 
-        # Assert pre-shutdown state is normal
-        assert emergency_manager.emergency_mode is False, "Should start in normal mode"
-
-        # Initiate emergency shutdown
-        await emergency_manager.emergency_shutdown()
-
-        # Verify that the emergency mode is activated
-        assert emergency_manager.emergency_mode is True, "Should be in emergency mode"
-
-        # Test that new position validation is rejected during emergency shutdown
+        # First verify position validation works normally
         result = await emergency_manager.validate_new_position(
             trading_pair='BTC-USD',
             size=1.0,
             price=50000.0
         )
-        assert result is False, "Should reject all positions during emergency"
+        assert result is True, "Should allow positions before emergency"
+
+        # Trigger emergency shutdown
+        await emergency_manager.emergency_shutdown()
+        assert emergency_manager.emergency_mode is True, "Should be in emergency mode"
+
+        # Try to validate a new position during emergency
+        result = await emergency_manager.validate_new_position(
+            trading_pair='BTC-USD',
+            size=1.0,
+            price=50000.0
+        )
+        assert result is False, "Should reject positions during emergency"
 
     async def test_risk_limit_validation(self, market_data_config, emergency_config, mock_websocket_handler, reset_emergency_manager):
         """Test risk limit validation"""
