@@ -5,7 +5,7 @@ import websockets
 import time
 import random
 from typing import Dict, Set, Optional, Callable, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from websockets.exceptions import ConnectionClosed, InvalidStatusCode
 
 class WebSocketHandler:
@@ -33,7 +33,7 @@ class WebSocketHandler:
         self.subscriptions: Set[str] = set()
         self.is_connected = False
         self.should_reconnect = True
-        self.last_message_time = datetime.utcnow()
+        self.last_message_time = datetime.now(timezone.utc)
         self.connection_attempts = 0
         self.max_reconnect_delay = 300  # Maximum reconnection delay in seconds
         self.connection_tasks = set()
@@ -198,7 +198,7 @@ class WebSocketHandler:
                     await pong_waiter
                     latency = (time.time() - ping_start) * 1000
                     await self.health_monitor.record_latency('websocket_ping', latency)
-                    self.last_message_time = datetime.utcnow()
+                    self.last_message_time = datetime.now(timezone.utc)
             except Exception as e:
                 self.logger.error(f"Heartbeat error: {str(e)}")
                 await self._handle_connection_error()
@@ -212,7 +212,7 @@ class WebSocketHandler:
                     continue
 
                 message = await self.websocket.recv()
-                self.last_message_time = datetime.utcnow()
+                self.last_message_time = datetime.now(timezone.utc)
 
                 if self.message_handler:
                     start_time = time.time()

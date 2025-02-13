@@ -18,7 +18,10 @@ class Position:
 class OrderExecutor:
     """Handles order execution and position tracking"""
     
-    def __init__(self, api_key: str, base_url: str, timeout: int = 30):
+    def __init__(self, trading_pair: str, api_key: str, base_url: str, timeout: int = 30):
+        if not trading_pair:
+            raise ValueError("Trading pair must be specified in the constructor")
+        self.trading_pair = trading_pair
         self.api_key = api_key
         self.base_url = base_url
         self.timeout = timeout
@@ -144,5 +147,6 @@ class OrderExecutor:
             "symbol": pos.symbol,
             "quantity": float(pos.quantity),
             "entry_price": float(pos.entry_price),
+            "stop_loss": float(pos.entry_price * Decimal("0.95") if pos.quantity > 0 else 0),
             "timestamp": pos.timestamp.isoformat()
         }
