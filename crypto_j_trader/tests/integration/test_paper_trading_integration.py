@@ -99,7 +99,7 @@ def trading_system(test_config):
     return OrderExecutor(
         trading_pair="BTC-USD",
         api_key=test_config['api_key'],
-        base_url=test_config['base_url'],
+        base_url="https://example.com",  # Replace with the correct base URL
         timeout=test_config['timeout']
     )
 
@@ -110,7 +110,7 @@ def multi_asset_trading_system():
     market_data = MockMarketData()
     
     # Create a PaperTrader with an executor that can handle multiple pairs
-    executor = OrderExecutor(exchange, None, paper_trading=True)  # No default pair
+    executor = OrderExecutor(exchange, "BTC-USD", paper_trading=True, trading_pair="BTC-USD")  # No default pair
     trader = PaperTrader(executor)
     
     return {

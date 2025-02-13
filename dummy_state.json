@@ -1,5 +1,5 @@
 {
-  "emergency_mode": true,
+  "emergency_mode": false,
   "position_limits": {
     "BTC-USD": "-1.0"
   },
@@ -9,7 +9,7 @@
     "position_manager": true,
     "order_executor": true
   },
-  "timestamp": "2025-02-12T22:20:52.825724+00:00",
+  "timestamp": "2025-02-13T09:42:37.671899+00:00",
   "reason": null,
-  "hash": "038c406d4913ae01dd3d09222d658b356b2d1461bfd65cc4f6c94acef3596142"
+  "hash": "68504693b115058ad19a2d245d1347a469c6ac96da732cfb1dc2d446862c41e9"
 }

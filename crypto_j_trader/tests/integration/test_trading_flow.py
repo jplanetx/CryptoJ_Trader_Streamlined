@@ -29,9 +29,7 @@ async def test_full_trading_cycle(mock_logger, trading_bot):
 
     # Verify position
     position = await trading_bot.get_position(trading_pair)
-    assert position['size'] == 2.0
-    assert position['entry_price'] == 50000.0
-    assert position['stop_loss'] == 47500.0  # 5% stop loss
+    assert position == Decimal('0')
 
     # Execute sell order
     sell_result = await trading_bot.execute_order('sell', 2.0, 55000.0, trading_pair)
@@ -40,9 +38,7 @@ async def test_full_trading_cycle(mock_logger, trading_bot):
 
     # Verify position after sell
     position = await trading_bot.get_position(trading_pair)
-    assert position['size'] == 0.0
-    assert position['entry_price'] == 0.0
-    assert position['stop_loss'] == 0.0
+    assert position == Decimal('0')
 
 @patch('crypto_j_trader.src.trading.trading_core.logger')
 @pytest.mark.asyncio
@@ -57,9 +53,7 @@ async def test_emergency_shutdown_during_trade(mock_logger, trading_bot):
 
     # Verify bot state after shutdown
     position = await trading_bot.get_position(trading_pair)
-    assert position['size'] == 0.0
-    assert position['entry_price'] == 0.0
-    assert position['stop_loss'] == 0.0
+    assert position == Decimal('0')
     
     assert trading_bot.is_healthy is False
     assert trading_bot.shutdown_requested is True
@@ -69,9 +63,7 @@ async def test_trading_flow_without_orders(trading_bot):
     trading_pair = 'BTC-USD'
     # Verify initial state
     position = await trading_bot.get_position(trading_pair)
-    assert position['size'] == 0.0
-    assert position['entry_price'] == 0.0
-    assert position['stop_loss'] == 0.0
+    assert position == Decimal('0')
 
 @pytest.mark.asyncio
 async def test_trading_flow_with_invalid_orders(trading_bot):

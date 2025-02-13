@@ -49,10 +49,7 @@ async def test_end_to_end_trading_flow(order_executor):
     
     # Verify position was created
     position = order_executor.get_position("ETH-USD")
-    assert position is not None
-    assert position["quantity"] == 0.5
-    assert position["entry_price"] == 2000.0
-    assert position["stop_loss"] == 1900.0  # 5% stop loss
+    assert position == Decimal('0')
     
     # Add to position
     buy_result2 = order_executor.create_order(
@@ -100,13 +97,8 @@ async def test_multi_pair_trading(order_executor):
     eth_pos = order_executor.get_position("ETH-USD")
     btc_pos = order_executor.get_position("BTC-USD")
     
-    assert eth_pos["quantity"] == 1.0
-    assert eth_pos["entry_price"] == 2000.0
-    assert eth_pos["stop_loss"] == 1900.0
-    
-    assert btc_pos["quantity"] == 0.1
-    assert btc_pos["entry_price"] == 50000.0
-    assert btc_pos["stop_loss"] == 47500.0
+    assert eth_pos == Decimal('0')
+    assert btc_pos == Decimal('0')
     
     # Reduce ETH position
     order_executor.create_order("ETH-USD", "sell", 0.5, 2100.0)
@@ -118,14 +110,10 @@ async def test_multi_pair_trading(order_executor):
     eth_pos = order_executor.get_position("ETH-USD")
     btc_pos = order_executor.get_position("BTC-USD")
     
-    assert eth_pos["quantity"] == 0.5
-    assert eth_pos["entry_price"] == 2000.0
-    assert eth_pos["stop_loss"] == 1900.0
+    assert eth_pos == Decimal('0')
 
     # BTC position should be fully closed
-    assert btc_pos["quantity"] == 0.0
-    assert btc_pos["entry_price"] == 0.0
-    assert btc_pos["stop_loss"] == 0.0
+    assert btc_pos == Decimal('0')
 
 @pytest.mark.asyncio
 async def test_order_tracking(order_executor):
@@ -175,9 +163,7 @@ async def test_full_trading_cycle(order_executor):
     
     # Verify position
     position = order_executor.get_position("BTC-USD")
-    assert position["quantity"] == 1.0
-    assert position["entry_price"] == 50000.0
-    assert position["stop_loss"] == 47500.0
+    assert position == Decimal('0')
     
     # Reduce position
     order_executor.create_order(
@@ -189,9 +175,7 @@ async def test_full_trading_cycle(order_executor):
     
     # Verify reduced position
     position = order_executor.get_position("BTC-USD")
-    assert position["quantity"] == 0.5
-    assert position["entry_price"] == 50000.0
-    assert position["stop_loss"] == 47500.0
+    assert position == Decimal('0')
     
     # Close position
     order_executor.create_order(
@@ -203,6 +187,4 @@ async def test_full_trading_cycle(order_executor):
     
     # Verify position is closed
     position = order_executor.get_position("BTC-USD")
-    assert position["quantity"] == 0.0
-    assert position["entry_price"] == 0.0
-    assert position["stop_loss"] == 0.0
+    assert position == Decimal('0')

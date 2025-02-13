@@ -30,8 +30,7 @@ async def test_emergency_manager():
     
     # Ensure we start in non-emergency state
     em.emergency_shutdown = False
-    em.shutdown_requested = False
-    em.save_state()
+em._save_state()
     
     print("\nTest 1: Basic Position Validation")
     result = await em.validate_new_position(
@@ -57,8 +56,7 @@ async def test_emergency_manager():
     
     # Test 3: Position Size Limit
     print("\nTest 3: Position Size Limit")
-    em.emergency_shutdown = False
-    em.save_state()
+em._save_state()
     
     # Test with oversized position (50 BTC ≈ 25% of portfolio)
     result = await em.validate_new_position(

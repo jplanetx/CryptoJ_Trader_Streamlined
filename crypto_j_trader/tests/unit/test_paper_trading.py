@@ -46,7 +46,7 @@ def mock_market_price():
 def mock_order_executor():
     """Create an OrderExecutor instance in paper trading mode"""
     exchange = MockExchangeService()
-    return OrderExecutor(exchange, "BTC-USD", paper_trading=True)
+    return OrderExecutor(exchange, "BTC-USD", paper_trading=True, trading_pair="BTC-USD")
 
 @pytest.fixture
 def paper_trader(mock_order_executor, mock_market_data):
@@ -364,7 +364,7 @@ def test_paper_trading_integration():
     # Initialize paper trading system
     exchange = MockExchangeService()
     executor = OrderExecutor(exchange, "BTC-USD", paper_trading=True)
-    trader = PaperTrader(executor)
+    trader = PaperTrader(executor, trading_pair="BTC/USD")
     
     # Set risk controls
     risk_controls = {"max_position_size": 10.0, "max_drawdown": 0.15}
