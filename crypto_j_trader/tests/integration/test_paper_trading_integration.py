@@ -33,8 +33,20 @@ class MockMarketData(MarketDataHandler):
             ]
         }
         self.is_running = True
+        self._ws_handler = None  # Don't initialize WebSocket in tests
     
+    async def start(self):
+        """Mock start without WebSocket connection"""
+        self.is_running = True
+        return True
+    
+    async def stop(self):
+        """Mock stop without WebSocket connection"""
+        self.is_running = False
+        return True
+
     def get_current_price(self, trading_pair):
+        """Get current price from mock data"""
         return self.last_prices.get(trading_pair)
     
     def get_price_history(self, symbol, period='5m'):

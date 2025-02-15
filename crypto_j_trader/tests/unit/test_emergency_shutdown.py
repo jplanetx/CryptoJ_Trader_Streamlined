@@ -186,3 +186,79 @@ async def test_verify_system_health(emergency_manager):
     # Test with missing risk limits
     emergency_manager.risk_limits = {}
     assert await emergency_manager._verify_system_health() is False
+
+"""Unit tests for emergency shutdown functionality"""
+import pytest
+from decimal import Decimal
+from datetime import datetime, timezone
+from ...src.trading.emergency_manager import EmergencyManager
+
+@pytest.fixture
+def emergency_config():
+    """Test configuration for emergency shutdown"""
+    return {
+        'max_positions': {
+            'BTC-USD': Decimal('50000'),
+            'ETH-USD': Decimal('25000')
+        },
+        'risk_limits': {
+            'BTC-USD': Decimal('100000'),
+            'ETH-USD': Decimal('50000')
+        },
+        'emergency_thresholds': {
+            'max_latency': 1000,
+            'market_data_max_age': 60,
+            'min_available_funds': 1000.0
+        }
+    }
+
+@pytest.mark.asyncio
+async def test_get_system_health(emergency_config):
+    """Test system health check during normal operation"""
+    manager = EmergencyManager(emergency_config)
+    health = await manager.get_system_health()
+    assert health['status'] == 'healthy'
+    assert 'last_check' in health
+    assert 'metrics' in health
+
+@pytest.mark.asyncio
+async def test_emergency_shutdown_persistence(emergency_config):
+    """Test emergency state persistence"""
+    manager = EmergencyManager(emergency_config)
+    
+    # Trigger shutdown
+    manager.emergency_shutdown = True
+    await manager.save_state()
+    
+    # Create new instance to test loading
+    new_manager = EmergencyManager(emergency_config)
+    assert new_manager.emergency_shutdown is True
+
+@pytest.mark.asyncio
+async def test_system_health_monitoring(emergency_config):
+    """Test health monitoring triggers"""
+    manager = EmergencyManager(emergency_config)
+    
+    # Simulate high latency
+    manager.last_latency = 2000  # Above threshold
+    health = await manager.get_system_health()
+    assert health['status'] == 'warning'
+
+@pytest.mark.asyncio
+async def test_invalid_position_limits(emergency_config):
+    """Test position limit validation"""
+    manager = EmergencyManager(emergency_config)
+    
+    with pytest.raises(ValueError):
+        await manager.validate_new_position(
+            trading_pair="BTC-USD",
+            size=-1.0,
+            price=50000.0
+        )
+
+@pytest.mark.asyncio
+async def test_verify_system_health(emergency_config):
+    """Test system health verification"""
+    manager = EmergencyManager(emergency_config)
+    status = await manager.verify_system_health()
+    assert status is True  # System should be healthy by default

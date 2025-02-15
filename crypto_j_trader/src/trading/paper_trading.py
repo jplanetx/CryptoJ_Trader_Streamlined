@@ -8,7 +8,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Union, Any
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -79,161 +79,158 @@ class Position:
     """Represents a trading position with detailed tracking information"""
     def __init__(self, symbol: str):
         self.symbol = symbol
-        self.quantity = Decimal("0")
-        self.cost_basis = Decimal("0")
-        self.realized_pnl = Decimal("0")
+        self.size = Decimal("0")
+        self.entry_price = Decimal("0")
+        self.current_price = Decimal("0")
         self.unrealized_pnl = Decimal("0")
-        self.average_entry_price = Decimal("0")
-        self.last_update_time = None
-        self.trades = []  # List to track individual trades
+        self.realized_pnl = Decimal("0")
+        self.stop_loss = Decimal("0")
+        self.trades = []
+        self.last_update_time = datetime.now(timezone.utc)
         logger.info(f"New position created for {symbol}")
 
-class PaperTrader:
-    def __init__(self, config, *args, **kwargs):
-        self.config = config
-        # Ensure a default trading pair to prevent integration errors
-        if not self.config.get("default_trading_pair"):
-            self.config["default_trading_pair"] = "BTC-USD"
-        self.orders = {}  # ensure orders are stored
-        self.order_executor = config.get('order_executor')
-        self.market_data_handler = config.get('market_data_handler')
-        self.positions = {}  # Maps symbol to Position objects
-        self.risk_controls = config.get('risk_controls')
-        self.initial_capital = Decimal("10000")  # Default initial capital
-        self.current_capital = Decimal("10000")  # Start with initial capital
-        self.daily_pnl = Decimal("0")  # Track daily P&L
-        self.max_drawdown_level = self._calculate_max_drawdown_level()
-        self.trade_history = TradeHistoryManager()
-        logger.info("PaperTrader initialized with trade history management")
-        self.pending_trailing_stops = {}
-
-    def _calculate_max_drawdown_level(self) -> Decimal:
-        max_drawdown_percent = (self.risk_controls.get("max_drawdown", Decimal("0.1"))
-                                if self.risk_controls else Decimal("0.1"))
-        level = self.initial_capital - (self.initial_capital * max_drawdown_percent)
-        logger.debug(f"Max drawdown level calculated: {level}")
-        return level
-
-    def integrate_risk_controls(self, risk_data: Dict) -> None:
-        if not risk_data:
-            logger.warning("Risk data is empty, no risk controls integrated.")
-            return
-        self.risk_controls = risk_data
-        self._update_risk_control_decimals(risk_data)
-        self.max_drawdown_level = self._calculate_max_drawdown_level()
-        logger.info(f"Risk controls integrated: {self.risk_controls}")
-
-    def _update_risk_control_decimals(self, risk_data: Dict) -> None:
-        if not risk_data:
-            return
-        decimal_fields = ['max_position_size', 'max_drawdown', 'daily_loss_limit']
-        for field in decimal_fields:
-            if field in risk_data:
-                risk_data[field] = Decimal(str(risk_data[field]))
-        logger.debug(f"Risk controls converted to Decimal: {risk_data}")
-
-    async def place_order(self, side, quantity, price, symbol):
-        order = {
-            'status': 'success',
-            'order_id': 'mock-order-id',
-            'entry_price': price,
-            'quantity': quantity,
-            'stop_loss': price * 0.95
+    def to_dict(self) -> Dict:
+        """Convert position to dictionary format"""
+        return {
+            'symbol': self.symbol,
+            'size': self.size,
+            'entry_price': self.entry_price,
+            'current_price': self.current_price,
+            'unrealized_pnl': self.unrealized_pnl,
+            'realized_pnl': self.realized_pnl,
+            'stop_loss': self.stop_loss,
+            'last_update': self.last_update_time.isoformat()
         }
-        self.orders[order['order_id']] = order
-        return order
 
-    def get(self, order_id, default=None):
-        return self.orders.get(order_id, default)
-
-    def _validate_order(self, order: Dict) -> None:
-        required_keys = ["symbol", "quantity", "side"]
-        for key in required_keys:
-            if key not in order:
-                error_msg = f"Order validation failed: Missing required key '{key}' in order: {order}"
-                logger.error(error_msg)
-                raise PaperTraderError(error_msg)
-        if not isinstance(order["quantity"], (int, float, Decimal)):
-            error_msg = f"Order validation failed: 'quantity' must be a number, got: {type(order['quantity'])}"
-            logger.error(error_msg)
-            raise PaperTraderError(error_msg)
-        if order["side"].lower() not in ["buy", "sell"]:
-            error_msg = f"Order validation failed: 'side' must be 'buy' or 'sell', got: '{order['side']}'"
-            logger.error(error_msg)
-            raise PaperTraderError(error_msg)
+class PaperTrader:
+    """Handles paper trading simulation with position tracking"""
+    
+    def __init__(self, config: Dict, *args, **kwargs):
+        """Initialize paper trader with configuration"""
+        self.config = config
+        self.positions: Dict[str, Position] = {}
+        self.orders = {}
+        self.order_counter = 1000
+        self.market_data = {}
+        self.initial_capital = Decimal(str(self.config.get('initial_capital', '100000')))
+        self.current_capital = self.initial_capital
+        self.daily_pnl = Decimal('0')
+        self.max_position_size = Decimal(str(self.config.get('risk_management', {}).get('max_position_size', '10')))
+        self.timeout = self.config.get('timeout', 30)
+        
+    async def execute_order(self, side: str, size: Union[float, Decimal], price: Union[float, Decimal], symbol: str) -> Dict:
+        """Execute a paper trading order"""
+        try:
+            # Convert inputs to Decimal
+            size_dec = Decimal(str(size))
+            price_dec = Decimal(str(price))
             
-    def _calculate_potential_pnl(self, order: Dict) -> Decimal:
-        """
-        Calculate potential P&L for an order based on current market conditions.
-        """
-        quantity = Decimal(str(order["quantity"]))
-        price = Decimal(str(order.get("price", "0")))
-        if order["side"].lower() == "buy":
-            return -quantity * price
-        elif order["side"].lower() == "sell":
-            return quantity * price
-        return Decimal("0")
-
-    def _update_daily_pnl(self, order: Dict) -> None:
-        quantity = Decimal(str(order["quantity"]))
-        price = Decimal(str(order.get("price", "0")))
-        if order["side"].lower() == "buy":
-            self.daily_pnl -= quantity * price
-        elif order["side"].lower() == "sell":
-            self.daily_pnl += quantity * price
-        logger.debug(f"Updated daily P&L (before capital update): {self.daily_pnl}")
-        # Update current capital as initial capital plus daily PnL
-        self.current_capital = self.initial_capital + self.daily_pnl
-        logger.debug(f"Current capital updated to: {self.current_capital}")
-
-    def update_position(self, symbol: str, quantity: Decimal, price: Decimal, is_buy: bool, trade_type: Optional[str] = None) -> Position:
-        logger.info(f"Updating position for {symbol}: quantity={quantity}, price={price}, is_buy={is_buy}")
+            # Validate order
+            if size_dec <= 0:
+                raise ValueError("Invalid order size")
+            if price_dec <= 0:
+                raise ValueError("Invalid order price")
+                
+            # Get or create position
+            if symbol not in self.positions:
+                self.positions[symbol] = Position(symbol)
+            position = self.positions[symbol]
+            
+            # Check position limits for buys
+            if side.lower() == 'buy':
+                new_position_size = position.size + size_dec
+                if new_position_size > self.max_position_size:
+                    raise ValueError("Position size limit exceeded")
+            else:  # Selling
+                if size_dec > position.size:
+                    raise ValueError("Insufficient position size")
+                    
+            # Update position
+            if side.lower() == 'buy':
+                total_value = (position.size * position.entry_price + size_dec * price_dec)
+                new_size = position.size + size_dec
+                position.size = new_size
+                position.entry_price = total_value / new_size if new_size > 0 else Decimal('0')
+            else:
+                realized_pnl = (price_dec - position.entry_price) * size_dec
+                position.realized_pnl += realized_pnl
+                position.size -= size_dec
+                if position.size == 0:
+                    position.entry_price = Decimal('0')
+                    position.stop_loss = Decimal('0')
+            
+            position.current_price = price_dec
+            position.unrealized_pnl = (price_dec - position.entry_price) * position.size
+            if position.size > 0:
+                position.stop_loss = position.entry_price * Decimal('0.95')
+            
+            # Record trade
+            trade = {
+                'symbol': symbol,
+                'side': side.lower(),
+                'size': str(size_dec),
+                'price': str(price_dec),
+                'timestamp': datetime.now(timezone.utc).isoformat()
+            }
+            position.trades.append(trade)
+            
+            # Generate order ID and record
+            self.order_counter += 1
+            order_id = f'paper-order-{self.order_counter}'
+            order_record = {
+                'id': order_id,
+                'symbol': symbol,
+                'side': side.lower(),
+                'size': str(size_dec),
+                'price': str(price_dec),
+                'timestamp': datetime.now(timezone.utc).isoformat(),
+                'status': 'filled'
+            }
+            self.orders[order_id] = order_record
+            
+            return order_record
+            
+        except Exception as e:
+            logger.error(f"Paper trading order execution error: {str(e)}")
+            return {
+                'status': 'error',
+                'message': str(e),
+                'symbol': symbol
+            }
+            
+    def get_position(self, symbol: str) -> Position:
+        """Get current position for a symbol"""
         if symbol not in self.positions:
             self.positions[symbol] = Position(symbol)
-        position = self.positions[symbol]
-        trade_quantity = quantity if is_buy else -quantity
-        new_quantity = position.quantity + trade_quantity
-        if new_quantity < 0:
-            error_msg = f"Invalid position size {new_quantity} for symbol {symbol}. Paper trading does not support short selling."
-            logger.error(error_msg)
-            raise PaperTraderError(error_msg)
-        # For buy orders, add to cost_basis; for sell orders, reduce it proportionally.
-        if is_buy:
-            position.cost_basis += quantity * price
-        else:
-            # Subtract the cost_basis proportional to the quantity sold.
-            position.realized_pnl += quantity * (price - position.average_entry_price)
-            position.cost_basis -= position.average_entry_price * quantity
-        position.quantity = new_quantity
-        if new_quantity != 0:
-            position.average_entry_price = position.cost_basis / new_quantity
-        else:
-            position.average_entry_price = Decimal("0")
-        position.last_update_time = datetime.now(timezone.utc)
-        logger.debug(f"Position updated: {position.__dict__}")
-        return position
+        return self.positions[symbol]
 
     def get_position_info(self, symbol: str) -> Dict:
-        if symbol not in self.positions:
-            return {
-                "symbol": symbol,
-                "quantity": Decimal("0"),
-                "cost_basis": Decimal("0"),
-                "realized_pnl": Decimal("0"),
-                "unrealized_pnl": Decimal("0"),
-                "average_entry_price": Decimal("0")
-            }
-        position = self.positions[symbol]
-        return {
-            "symbol": position.symbol,
-            "quantity": position.quantity,
-            "cost_basis": position.cost_basis,
-            "realized_pnl": position.realized_pnl,
-            "unrealized_pnl": position.unrealized_pnl,
-            "average_entry_price": position.average_entry_price
-        }
+        """Get position information as a dictionary"""
+        position = self.get_position(symbol)
+        return position.to_dict()
+        
+    def get(self, order_id: str, default: Any = None) -> Optional[Dict]:
+        """Get order details by ID"""
+        return self.orders.get(order_id, default)
 
-    def get_position(self, symbol: str) -> Decimal:
-        if symbol not in self.positions:
-            return Decimal("0")
-        return self.positions[symbol].quantity
+    def place_order(self, order: Dict) -> Dict:
+        """Place a new order"""
+        try:
+            symbol = order['symbol']
+            side = order['side']
+            quantity = Decimal(str(order['quantity']))
+            price = Decimal(str(order.get('price', self.market_data.get(symbol, '50000'))))
+            
+            return self.execute_order(side, quantity, price, symbol)
+            
+        except Exception as e:
+            logger.error(f"Order placement error: {str(e)}")
+            return {
+                'status': 'error',
+                'message': str(e)
+            }
+
+    def integrate_risk_controls(self, risk_controls: Dict) -> None:
+        """Integrate risk control parameters"""
+        if 'max_position_size' in risk_controls:
+            self.max_position_size = Decimal(str(risk_controls['max_position_size']))

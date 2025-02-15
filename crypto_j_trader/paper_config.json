@@ -6,7 +6,12 @@
   },
   "risk_management": {
     "risk_threshold": 10000.0,
-    "alert_email": "trader@example.com"
+    "alert_email": "trader@example.com",
+    "stop_loss_pct": 0.05,
+    "max_position_size": 10.0,
+    "max_daily_loss": 1000.0,
+    "position_size_limit": 50000.0,
+    "max_drawdown": 0.2
   },
   "market_data": {
     "provider": "default",
@@ -14,7 +19,20 @@
   },
   "monitoring": {
     "enabled": true,
-    "log_level": "INFO"
+    "log_level": "INFO",
+    "health_check_interval": 60,
+    "metrics_save_interval": 300,
+    "detailed_health_check": true,
+    "thresholds": {
+      "warning_latency": 100,
+      "critical_latency": 500,
+      "warning_error_rate": 5,
+      "critical_error_rate": 10,
+      "warning_memory": 80,
+      "critical_memory": 95,
+      "warning_cpu": 70,
+      "critical_cpu": 90
+    }
   },
   "launch_checklist": [
     "Verify all critical tests passing",
@@ -22,5 +40,18 @@
     "Ensure market data consistency checks are in place",
     "Ensure system monitoring operational",
     "Confirm paper trading configuration ready"
-  ]
+  ],
+  "paper_trading": true,
+  "trading_pairs": ["BTC-USD", "ETH-USD"],
+  "initial_capital": 100000.0,
+  "timeout": 30,
+  "execution": {
+    "order_timeout": 10,
+    "max_retries": 3,
+    "retry_delay": 1
+  },
+  "websocket": {
+    "ping_interval": 30,
+    "reconnect_delay": 5
+  }
 }

@@ -1,30 +1,39 @@
-"""
-Basic functionality tests to verify testing infrastructure
-"""
+"""Basic unit tests for core functionality"""
 import pytest
-from unittest.mock import patch
-from decimal import Decimal
+from unittest.mock import patch, AsyncMock
+from decimal import Decimal, InvalidOperation
+from typing import Optional
 from crypto_j_trader.src.trading.trading_core import TradingBot
 from crypto_j_trader.src.trading.market_data_handler import MarketDataHandler
-from typing import Optional
 
 class MockMarketDataHandler(MarketDataHandler):
     """Mock MarketDataHandler for testing."""
+    
     async def get_last_price(self, trading_pair: str) -> Optional[float]:
         return 50000.0  # Return a fixed price for testing
-
+    
     async def start(self) -> None:
-        pass  # Do nothing for mock start
-
+        pass
+    
     async def stop(self) -> None:
-        pass  # Do nothing for mock stop
+        pass
 
 @pytest.fixture
 async def market_data_handler():
     handler = MarketDataHandler(config={"api_key": "dummy", "api_secret": "dummy"})
-    if hasattr(handler, "initialize") and callable(handler.initialize):
-        await handler.initialize()
     return handler
+
+@pytest.fixture
+def test_config():
+    return {
+        'trading_pairs': ['BTC-USD'],
+        'risk_management': {
+            'max_position_size': 5.0,
+            'max_daily_loss': 500.0,
+            'stop_loss_pct': 0.05
+        },
+        'paper_trading': True
+    }
 
 def test_trading_bot_init(test_config):
     """Test basic TradingBot initialization."""
@@ -32,64 +41,33 @@ def test_trading_bot_init(test_config):
         bot = TradingBot(test_config)
         assert bot is not None
         assert bot.config == test_config
+        assert isinstance(bot.positions, dict)
 
-def test_get_empty_position(test_config):
+@pytest.mark.asyncio
+async def test_get_empty_position(test_config):
     """Test getting position when none exists."""
     with patch('crypto_j_trader.src.trading.trading_core.MarketDataHandler', MockMarketDataHandler):
         bot = TradingBot(test_config)
-        trading_pair = 'BTC-USD'
-        position = bot.get_position(trading_pair)
-        assert position['size'] == 0.0
-        assert position['entry_price'] == 0.0
-        assert position['unrealized_pnl'] == 0.0
-        assert position['stop_loss'] == 0.0
+        position = await bot.get_position('BTC-USD')
+        assert isinstance(position, dict)
+        assert position['size'] == Decimal('0')
+        assert position['entry_price'] == Decimal('0')
 
 @pytest.mark.asyncio
-async def test_execute_simple_order(test_config, mock_exchange_service):
+async def test_execute_simple_order(test_config):
     """Test basic order execution."""
     print("\nStarting test_execute_simple_order")
-    try:
-        with patch('crypto_j_trader.src.trading.trading_core.RiskManager') as mock_risk_manager:
-
-            # Configure risk manager mock
-            mock_risk_manager.return_value.validate_order.return_value = True
-
-            print("Creating TradingBot instance")
-            bot = TradingBot(test_config, exchange_service=mock_exchange_service)
-
-            print("Executing order")
-            result = await bot.execute_order(
-                symbol='BTC-USD',
-                side='buy',
-                quantity=Decimal('1.0'),
-                price=Decimal('50000.0')
-            )
-            print(f"Order result: {result}")
-
-            # Add explicit assertions with messages
-            assert result is not None, "Order result should not be None"
-            assert result.get('status') == 'success', f"Expected status 'success', got {result.get('status')}"
-            assert 'order_id' in result, "Result should contain order_id"
-
-            # Verify position was updated
-            position = bot.get_position('BTC-USD')
-            print(f"Position after order: {position}")
-
-            assert position['size'] == 1.0, f"Expected position size 1.0, got {position['size']}"
-            assert position['entry_price'] == 50000.0, f"Expected entry price 50000.0, got {position['entry_price']}"
-            assert position['stop_loss'] == 47500.0, f"Expected stop loss 47500.0, got {position['stop_loss']}"
-
-    except Exception as e:
-        print(f"Test failed with exception: {str(e)}")
-        raise
-        assert result['status'] == 'success'
+    with patch('crypto_j_trader.src.trading.trading_core.MarketDataHandler', MockMarketDataHandler):
+        bot = TradingBot(test_config)
+        result = await bot.execute_order('buy', 1.0, 50000.0, 'BTC-USD')
+        
+        assert result['status'] == 'filled'
         assert 'order_id' in result
-
-        # Verify position was updated
-        position = bot.get_position('BTC-USD')
-        assert position['size'] == 1.0
-        assert position['entry_price'] == 50000.0
-        assert position['stop_loss'] == 47500.0  # 5% stop loss
+        
+        position = await bot.get_position('BTC-USD')
+        assert position['size'] == Decimal('1.0')
+        assert position['entry_price'] == Decimal('50000.0')
+        assert position['stop_loss'] == Decimal('47500.0')  # 5% stop loss
 
 @pytest.mark.asyncio
 async def test_health_check(test_config):
@@ -97,5 +75,10 @@ async def test_health_check(test_config):
     with patch('crypto_j_trader.src.trading.trading_core.MarketDataHandler', MockMarketDataHandler):
         bot = TradingBot(test_config)
         health_status = await bot.check_health()
-        assert health_status['status'] == 'healthy'
-        assert bot.last_health_check is not None
+        assert health_status is True  # Basic health check returns boolean
+        
+        # Test detailed health check
+        bot.config['detailed_health_check'] = True
+        detailed_status = await bot.check_health()
+        assert isinstance(detailed_status, dict)
+        assert detailed_status['status'] == 'healthy'

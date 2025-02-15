@@ -20,5 +20,11 @@
     },
     "execution": {
         "interval_seconds": 60
+    },
+    "websocket": {
+        "uri": "wss://ws-feed.exchange.coinbase.com",
+        "enabled": true,
+        "ping_interval": 30,
+        "max_reconnect_delay": 300
     }
 }

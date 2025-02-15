@@ -1,22 +1,23 @@
 #!/bin/bash
+# Launch script for paper trading with transition monitoring
 
-# Set the path to the project directory
-PROJECT_DIR="/mnt/c/Projects/CryptoJ_Trader_New/crypto_j_trader"
+# Configuration
+CONFIG_FILE="crypto_j_trader/paper_config.json"
+LOG_FILE="paper_trading.log"
+METRICS_DIR="data/metrics"
 
-# Set the path to the configuration file
-CONFIG_FILE="$PROJECT_DIR/paper_config.json"
+# Create required directories
+mkdir -p "$METRICS_DIR"
+mkdir -p "data/trades"
 
-# Set the path to the main script
-MAIN_SCRIPT="$PROJECT_DIR/main.py"
+# Start with clean log
+echo "Starting paper trading transition $(date)" > "$LOG_FILE"
 
-# Activate the virtual environment if needed
-# source "$PROJECT_DIR/venv/bin/activate"
-
-# Launch the trading bot
-
-if [ -f "$MAIN_SCRIPT" ]; then
-  python3 "$MAIN_SCRIPT" --config "$CONFIG_FILE" &
-  echo "Trading bot launched in background"
-else
-  echo "Error: Main script not found at $MAIN_SCRIPT"
-fi
+# Launch python process with transition monitoring
+python -m crypto_j_trader.src.main \
+    --config "$CONFIG_FILE" \
+    --paper-trading \
+    --transition-monitor \
+    --metrics-dir "$METRICS_DIR" \
+    --log-file "$LOG_FILE" \
+    "$@"

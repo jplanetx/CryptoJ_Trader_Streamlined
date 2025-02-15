@@ -1,5 +1,5 @@
 {
-  "emergency_mode": true,
+  "emergency_mode": false,
   "position_limits": {},
   "system_health_checks": {
     "data_freshness": true,
@@ -7,7 +7,7 @@
     "position_manager": true,
     "order_executor": true
   },
-  "timestamp": "2025-02-13T09:42:36.584588+00:00",
+  "timestamp": "2025-02-15T19:09:57.500475+00:00",
   "reason": null,
-  "hash": "c8d1a2ab55448ed42908ba719f4ddc1a5254441ade71bab2de63b0dd68046a3a"
+  "hash": "a70f8ed007a5bd99582fc819b6133372431d40607b2a87da5d65945da776f410"
 }

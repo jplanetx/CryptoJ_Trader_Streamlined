@@ -1,0 +1,10 @@
+import pytest
+import sys
+import os
+
+# Get the project root directory
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+def pytest_configure(config):
+    # Add the project root to the Python path
+    sys.path.insert(0, PROJECT_ROOT)

@@ -257,47 +257,41 @@ class EmergencyManager:
             self.logger.error(f"Health verification error: {str(e)}")
             return False
 
-    async def validate_new_position(self, trading_pair: str, size: float, price: float, market_data: Optional[Dict[str, Any]] = None) -> bool:
-        """Validate if a new position can be taken based on risk limits and position limits."""
-        # Always reject new positions in emergency mode
+    async def validate_new_position(self, trading_pair: str, size: float, price: float) -> bool:
+        """
+        Validate if a new position can be taken based on current system state
+        and risk parameters.
+        """
         if self.emergency_mode:
-            self.logger.warning(f"New position blocked for {trading_pair}: System in emergency mode")
+            self.logger.warning("Emergency mode active - rejecting new position")
             return False
 
-        # Rest of the validation logic
-        max_position = self.max_positions.get(trading_pair, Decimal('0'))
-        current_position = self.position_limits.get(trading_pair, Decimal('0'))
-        new_position = current_position + Decimal(size)
-        self.logger.debug(f"Validating new position for {trading_pair}: current={current_position}, size={size}, new={new_position}, max={max_position}")
+        # Convert to decimals for consistent calculations
+        size_dec = Decimal(str(size))
+        price_dec = Decimal(str(price))
+        position_value = size_dec * price_dec
 
-        if new_position > max_position:
-            self.logger.warning(f"Position {trading_pair} exceeds max limit: {new_position} > {max_position}")
+        # Check position size limits
+        max_position_size = self.max_positions.get(trading_pair)
+        if max_position_size and size_dec > max_position_size:
+            self.logger.warning(f"Position size {size_dec} exceeds limit {max_position_size} for {trading_pair}")
             return False
 
-        # Check for extreme market conditions
-        if market_data and trading_pair in market_data:
-            min_funds = self.emergency_thresholds.get('min_available_funds', 0)
-            if market_data[trading_pair]['price'] > min_funds:
-                self.logger.warning(f"Price {price} exceeds min available funds threshold: {min_funds}")
+        # Check risk limits
+        risk_limit = self.risk_limits.get(trading_pair)
+        if risk_limit and position_value > risk_limit:
+            self.logger.warning(f"Position value {position_value} exceeds risk limit {risk_limit} for {trading_pair}")
+            return False
+
+        # Check emergency thresholds
+        if trading_pair in self.emergency_thresholds:
+            threshold = Decimal(str(self.emergency_thresholds[trading_pair]))
+            if position_value > threshold:
+                self.logger.warning(f"Position value {position_value} exceeds emergency threshold {threshold}")
                 return False
-            
-            # Check for data freshness
-            market_data_max_age = self.emergency_thresholds.get('market_data_max_age', 300)
-            market_data_timestamp = datetime.fromisoformat(market_data[trading_pair]['timestamp']).replace(tzinfo=timezone.utc)
-            time_diff = datetime.now(timezone.utc) - market_data_timestamp
-            if time_diff.total_seconds() > market_data_max_age:
-                self.logger.warning(f"Market data for {trading_pair} is stale")
-                return False
-
-        # Check for risk limits
-        risk_limit = self.risk_limits.get(trading_pair, Decimal('0'))
-        position_value = new_position * Decimal(price)
-        if position_value > risk_limit:
-            self.logger.warning(f"Position value {position_value} exceeds risk limit: {risk_limit}")
-            return False
 
         return True
-    
+
     async def recover_state(self) -> Dict[str, Any]:
         """Recover the emergency state from the persistence file."""
         try:

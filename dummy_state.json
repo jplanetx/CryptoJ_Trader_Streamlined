@@ -1,7 +1,8 @@
 {
   "emergency_mode": false,
   "position_limits": {
-    "BTC-USD": "-1.0"
+    "BTC-USD": "5.0",
+    "ETH-USD": "50.0"
   },
   "system_health_checks": {
     "data_freshness": true,
@@ -9,7 +10,7 @@
     "position_manager": true,
     "order_executor": true
   },
-  "timestamp": "2025-02-13T09:42:37.671899+00:00",
+  "timestamp": "2025-02-15T19:09:58.624129+00:00",
   "reason": null,
-  "hash": "68504693b115058ad19a2d245d1347a469c6ac96da732cfb1dc2d446862c41e9"
+  "hash": "a2a6ff7f88ee8ddf7572f944e1e9968c86b9f759a37b63e4e9a7bee4b7e1c5f2"
 }

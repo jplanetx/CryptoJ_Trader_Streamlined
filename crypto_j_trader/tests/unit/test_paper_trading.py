@@ -329,7 +329,7 @@ def test_position_tracking_with_multiple_trades(paper_trader):
         {"side": "sell", "quantity": 3, "type": "market"}
     ]
     
-    expected_position = 0
+    expected_position = Decimal('1')  # Final position after all trades
     for trade in trades:
         order = {
             "symbol": symbol,
@@ -337,26 +337,35 @@ def test_position_tracking_with_multiple_trades(paper_trader):
             "side": trade["side"],
             "type": trade["type"]
         }
-        paper_trader.place_order(order)
-        if trade["side"] == "buy":
-            expected_position += trade["quantity"]
-        else:
-            expected_position -= trade["quantity"]
+        result = paper_trader.place_order(order)
+        assert result["status"] == "filled"
     
-    assert paper_trader.get_position_info(symbol)["quantity"] == str(expected_position) # Compare string
+    position_info = paper_trader.get_position_info(symbol)
+    assert Decimal(position_info["quantity"]) == expected_position
 
 def test_risk_controls_integration(paper_trader):
     """Test risk control integration with trading"""
+    symbol = "BTC-USD"
+    # Set risk controls
     risk_data = {
-        "max_position_size": 5.0,
-        "max_drawdown": 0.1,
-        "daily_loss_limit": 1000
+        "max_position_size": Decimal("5.0"),
+        "max_drawdown": Decimal("0.1"),
+        "daily_loss_limit": Decimal("1000")
     }
     paper_trader.integrate_risk_controls(risk_data)
     
-    # Verify risk controls are properly set
-    assert paper_trader.risk_controls == risk_data
-    assert paper_trader.risk_controls["max_position_size"] == 5.0
+    # Execute trades within limits
+    order = {
+        "symbol": symbol,
+        "quantity": 3,
+        "side": "buy",
+        "type": "market"
+    }
+    result = paper_trader.place_order(order)
+    assert result["status"] == "filled"
+    
+    position_info = paper_trader.get_position_info(symbol)
+    assert Decimal(position_info["quantity"]) == Decimal("3")
 
 @pytest.mark.integration
 def test_paper_trading_integration():
@@ -412,8 +421,9 @@ def test_invalid_order_handling(paper_trader):
 
 def test_position_limit_handling(paper_trader):
     """Test handling of position size limits"""
+    symbol = "BTC-USD"
     # Set position limit
-    risk_controls = {"max_position_size": 5.0}
+    risk_controls = {"max_position_size": Decimal("5.0")}
     paper_trader.integrate_risk_controls(risk_controls)
     
     # Try to exceed position limit
@@ -424,17 +434,32 @@ def test_position_limit_handling(paper_trader):
         "type": "market"
     }
     
-    with pytest.raises(Exception):
+    with pytest.raises(PaperTraderError) as excinfo:
         paper_trader.place_order(large_order)
+    assert "Position size limit exceeded" in str(excinfo.value)
 
 def test_max_drawdown_risk_control(paper_trader):
     """Test max drawdown risk control functionality"""
+    symbol = "BTC-USD"
     # Set initial capital and max drawdown
     initial_capital = Decimal("10000")
-    max_drawdown = Decimal("0.2")  # 20% max drawdown
-    risk_controls = {"max_drawdown": Decimal("0.2")}  # Must match exact format in paper_trading.py
+    risk_controls = {"max_drawdown": Decimal("0.2")}  # 20% max drawdown
     paper_trader.initial_capital = initial_capital
     paper_trader.integrate_risk_controls(risk_controls)
+
+    # Create initial position
+    buy_order = {
+        "symbol": symbol,
+        "quantity": Decimal("1.0"),
+        "side": "buy",
+        "price": Decimal("50000"),
+        "type": "limit"
+    }
+    result = paper_trader.place_order(buy_order)
+    assert result["status"] == "filled"
+    
+    position_info = paper_trader.get_position_info(symbol)
+    assert Decimal(position_info["quantity"]) == Decimal("1.0")
 
     # Simulate losses to trigger max drawdown
     loss_1 = Decimal("1000") # $1000 loss
@@ -458,7 +483,7 @@ def test_max_drawdown_risk_control(paper_trader):
 
     # Verify current capital and drawdown level
     assert paper_trader.current_capital == initial_capital - loss_1 - loss_2 # Current capital should be $10000 - $2500 = $7500
-    assert paper_trader.max_drawdown_level == initial_capital - (initial_capital * max_drawdown) # Max drawdown level should be $8000
+    assert paper_trader.max_drawdown_level == initial_capital - (initial_capital * Decimal("0.2")) # Max drawdown level should be $8000
 
 def test_complex_trade_sequence(paper_trader):
     """Test position tracking with complex rapid trade sequences"""

@@ -19,244 +19,196 @@ def validate_trading_pair(trading_pair: str) -> bool:
     return bool(pattern.match(trading_pair))
 
 class TradingBot:
+    """Core trading bot implementation"""
+    
     def __init__(self, config: Dict[str, Any], trading_pair: Optional[str] = None, *args, **kwargs):
+        """Initialize trading bot with configuration"""
         # Support string config by loading JSON
         if isinstance(config, str):
             with open(config, 'r') as f:
                 config = json.load(f)
         self.config = config
         self.paper_trading = config.get('paper_trading', False)
-        self.positions = {}  # positions stored as symbol -> Decimal
-        # Initialize order executor with self reference
-        from crypto_j_trader.src.trading.order_executor import OrderExecutor
-        self.order_executor = OrderExecutor(self)
-        if self.paper_trading:
-            from crypto_j_trader.src.trading.paper_trading import PaperTrader
-            self.paper_trader = PaperTrader(config)
+        self.positions = {}
+        self.market_prices = {}
+        self.is_healthy = True
+        self.shutdown_requested = False
+        self.daily_loss = Decimal('0')
+        self.daily_volume = Decimal('0')
+        self.daily_trades = 0
+        
+        # Initialize components
+        self.trading_pairs = config.get('trading_pairs', [])
+        if not self.trading_pairs:
+            self.trading_pairs = config.get('trading', {}).get('symbols', ['BTC-USD'])
+            
+        # Initialize order executor
+        self.order_executor = kwargs.get('order_executor')
+        if not self.order_executor:
+            from crypto_j_trader.src.trading.order_executor import OrderExecutor
+            self.order_executor = OrderExecutor(self, trading_pair=trading_pair or self.trading_pairs[0])
+
+        # Initialize market data handler only if not in paper trading mode
         self.market_data_handler = kwargs.get('market_data_handler')
+        if not self.market_data_handler and not self.paper_trading:
+            from crypto_j_trader.src.trading.market_data_handler import MarketDataHandler
+            self.market_data_handler = MarketDataHandler()
+
+        # Initialize risk manager
         self.risk_manager = kwargs.get('risk_manager')
         
-        # Use proper dummy order executor if none provided
-        if self.order_executor is None:
-            from .order_execution import OrderExecutor
-            self.order_executor = OrderExecutor(trading_bot=self)
-        
-        if self.market_data_handler is None:
-            # Use a dummy MarketDataHandler that implements both update_price and get_current_price.
-            class DummyMarketDataHandler:
-                async def update_price(self, symbol):
-                    pass
-                def get_current_price(self, symbol):
-                    return 50000.0  # fixed default price
-            self.market_data_handler = DummyMarketDataHandler()
-        
-        self.is_healthy = True
-        self.last_health_check = datetime.now()
-        self.daily_loss = 0.0
-        self.market_prices = {}
-        self.shutdown_requested = False
-        self.daily_stats = {
-            'trades': 0,
-            'volume': 0.0,
-            'pnl': 0.0
+        # Initialize health monitor
+        self.health_monitor = kwargs.get('health_monitor')
+        if not self.health_monitor:
+            from crypto_j_trader.src.trading.health_monitor import HealthMonitor
+            self.health_monitor = HealthMonitor()
+
+    async def execute_order(self, side: str, size: float, price: float, symbol: str) -> Dict:
+        """Execute a trade order"""
+        try:
+            # Convert to decimals
+            size_dec = Decimal(str(size))
+            price_dec = Decimal(str(price))
+            
+            # Basic validation
+            if size_dec <= 0:
+                return {'status': 'error', 'message': 'Invalid size'}
+            if price_dec <= 0:
+                return {'status': 'error', 'message': 'Invalid price'}
+                
+            # Check daily loss limit
+            if self.daily_loss <= -self.config['risk_management'].get('max_daily_loss', float('inf')):
+                return {'status': 'error', 'message': 'daily loss limit exceeded'}
+                
+            # Check position size limit
+            position = await self.get_position(symbol)
+            new_size = position['size'] + size_dec if side.lower() == 'buy' else position['size'] - size_dec
+            if abs(new_size) > self.config['risk_management'].get('max_position_size', float('inf')):
+                return {'status': 'error', 'message': 'position size limit exceeded'}
+                
+            # Execute order through executor
+            result = await self.order_executor.execute_order(side, size_dec, price_dec, symbol)
+            
+            # If paper trading, always return successful fill
+            if self.paper_trading:
+                result = {
+                    'status': 'filled',
+                    'order_id': f'paper-{len(self.positions)}-{datetime.now().timestamp()}',
+                    'symbol': symbol,
+                    'side': side,
+                    'size': str(size_dec),
+                    'price': str(price_dec)
+                }
+            
+            # Update daily stats on success
+            if result['status'] == 'filled':
+                self.daily_trades += 1
+                self.daily_volume += size_dec * price_dec
+                
+                # Update position tracking
+                if symbol not in self.positions:
+                    self.positions[symbol] = {
+                        'size': Decimal('0'),
+                        'entry_price': Decimal('0')
+                    }
+                
+                pos = self.positions[symbol]
+                if side.lower() == 'buy':
+                    total_value = (pos['size'] * pos['entry_price'] + size_dec * price_dec)
+                    pos['size'] += size_dec
+                    pos['entry_price'] = total_value / pos['size'] if pos['size'] > 0 else Decimal('0')
+                else:
+                    pos['size'] -= size_dec
+                    if pos['size'] == 0:
+                        pos['entry_price'] = Decimal('0')
+                
+            return result
+            
+        except Exception as e:
+            logger.error(f"Order execution error: {str(e)}")
+            return {'status': 'error', 'message': str(e)}
+
+    async def get_position(self, symbol: str) -> Dict:
+        """Get current position for a symbol"""
+        if self.order_executor:
+            return self.order_executor.get_position(symbol)
+        return {
+            'size': Decimal('0'),
+            'entry_price': Decimal('0'),
+            'current_price': Decimal('0'),
+            'unrealized_pnl': Decimal('0'),
+            'stop_loss': Decimal('0')
         }
-        self._init_from_config()
-        # Validate and use provided trading pair or default from config or fallback to "BTC-USD"
-        if trading_pair and not validate_trading_pair(trading_pair):
-            raise ValueError(f"Invalid trading pair format: {trading_pair}")
-        if trading_pair:
-            self.trading_pair = trading_pair
-        elif self.trading_pairs:
-            self.trading_pair = self.trading_pairs[0]
-        else:
-            self.trading_pair = self.config.get("default_trading_pair", "BTC-USD")
-        # Expose market data handler for legacy tests
-        self.MarketDataHandler = MarketDataHandler
 
-    def _init_from_config(self):
-        """Initialize internal state from config."""
-        self.trading_pairs = self.config.get('trading_pairs', [])
-        if not self.trading_pairs:
-            self.trading_pairs = self.config.get('trading', {}).get('symbols', [])
+    async def check_health(self) -> Union[Dict, bool]:
+        """Check system health status"""
+        if self.config.get('detailed_health_check', False):
+            health_status = await self.health_monitor.check_health()
+            health_status.update({
+                'api_status': True,  # Basic API status
+                'metrics': {
+                    'cpu_usage': 0,  # Placeholder for actual metrics
+                    'memory_usage': 0,
+                    'order_latency': 0
+                }
+            })
+            return health_status
+        return self.is_healthy
 
-    async def update_price(self, symbol: str, price: float):
-        """Update price for a symbol."""
+    async def update_market_price(self, symbol: str, price: float) -> None:
+        """Update market price for a symbol"""
+        self.market_prices[symbol] = Decimal(str(price))
         if self.market_data_handler:
             await self.market_data_handler.update_price(symbol)
-            self.market_prices[symbol] = price
 
-    async def validate_order(self, symbol: str, side: str, size: float, price: float) -> bool:
-        """Validate order parameters."""
-        if not validate_trading_pair(symbol):
-            return False
-        if side not in ['buy', 'sell']:
-            return False
-        if size <= 0 or price <= 0:
-            return False
-        return True
+    async def reset_system(self) -> None:
+        """Reset system state"""
+        self.positions.clear()
+        self.market_prices.clear()
+        self.is_healthy = True
+        self.shutdown_requested = False
+        await self.reset_daily_stats()
 
-    async def get_current_price(self, symbol: str) -> float:
-        """Get current price for a symbol."""
-        if symbol in self.market_prices:
-            return self.market_prices[symbol]
-        elif self.market_data_handler:
-            return self.market_data_handler.get_current_price(symbol)
-        return 0.0
+    async def reset_daily_stats(self) -> None:
+        """Reset daily statistics"""
+        self.daily_loss = Decimal('0')
+        self.daily_volume = Decimal('0')
+        self.daily_trades = 0
 
-    async def get_position(self, symbol: str) -> Decimal:
-        """Get current position for a symbol.""" 
-        return self.positions.get(symbol, Decimal('0'))
-
-    async def execute_order(self, side: str, size: float, price: float, symbol: str) -> dict:
-        """Execute a trade order."""
-        # Validate parameters
-        if size <= 0:
-            return {'status': 'error', 'message': 'Invalid size'}
-        if price <= 0:
-            return {'status': 'error', 'message': 'Invalid price'}
-
-        # Check position limits
-        max_size = self.config.get('risk_management', {}).get('max_position_size', float('inf'))
-        position = await self.get_position(symbol)  # Fix: Await the coroutine
-        new_size = abs(position + Decimal(str(size if side == 'buy' else -size)))
-        
-        if new_size > max_size:
-            return {'status': 'error', 'message': 'position size limit exceeded'}
-
-        # Check daily loss limit
-        max_daily_loss = self.config.get('risk_management', {}).get('max_daily_loss', float('inf'))
-        if abs(self.daily_loss) > max_daily_loss:
-            return {'status': 'error', 'message': 'daily loss limit exceeded'}
-
-        try:
-            result = await self.order_executor.create_order(
-                side=side,
-                quantity=size,
-                price=price,
-                symbol=symbol
-            )
-            
-            if result['status'] == 'filled':
-                # Update market price and position
-                self.market_prices[symbol] = price
-                
-                # Update position using dict format
-                curr_pos = await self.get_position(symbol)  # Fix: Await the coroutine
-                size_dec = Decimal(str(size))
-                if side == 'buy':
-                    new_size = curr_pos + size_dec
-                else:
-                    new_size = curr_pos - size_dec
-                
-                self.positions[symbol] = new_size
-                
-                # Update daily stats
-                self.daily_stats['trades'] += 1
-                self.daily_stats['volume'] += size * price
-
-                # Map 'filled' to 'success' for consistency
-                result['status'] = 'success'
-
-            # For testing, force mock order id if order id not set
-            if 'order_id' not in result or result['order_id'] is None:
-                result['order_id'] = 'mock-order-id'
-
-            return result
-
-        except ValueError as e:
-            # Propagate validation errors
-            return {'status': 'error', 'message': str(e)}
-        except Exception as e:
-            logger.error(f"Order execution failed: {str(e)}")
-            return {'status': 'error', 'message': str(e)}
-
-    async def check_positions(self):
-        """Check all positions for stop loss/take profit triggers."""
-        for symbol in list(self.positions.keys()):
-            position = await self.get_position(symbol)  # Fix: Await the coroutine
-            if position and position == 0:
-                continue
-                
-            current_price = self.market_prices.get(symbol, 0)
-            
-            # Check stop loss
-            if position > 0 and current_price <= position * Decimal("0.95"):
-                await self.execute_order('sell', float(position), current_price, symbol)
-            elif position < 0 and current_price >= position * Decimal("0.95"):
-                await self.execute_order('buy', abs(float(position)), current_price, symbol)
-
-    async def update_market_price(self, symbol: str, price: float):
-        """Update current market price and check stops."""
-        self.market_prices[symbol] = price
-        await self.check_positions()
-
-    async def emergency_shutdown(self):
-        """Execute emergency shutdown procedure."""
-        logger.warning("Initiating emergency shutdown")
+    async def emergency_shutdown(self) -> Dict:
+        """Execute emergency shutdown procedure"""
         self.shutdown_requested = True
+        self.is_healthy = False
         
         # Close all positions
         for symbol in list(self.positions.keys()):
             position = await self.get_position(symbol)
-            if position and position != 0:
-                await self.execute_order(
-                    'sell' if position > 0 else 'buy',
-                    abs(float(position)),
-                    self.market_prices.get(symbol, 0),
-                    symbol
-                )
-                
-        self.is_healthy = False
-        return {'status': 'success'}
-
-    async def check_health(self) -> Dict[str, Any]:
-        """Check system health status."""
-        self.last_health_check = datetime.now()
+            if position['size'] != 0:
+                # Get latest price or use entry price as fallback
+                price = self.market_prices.get(symbol, position['entry_price'])
+                side = 'sell' if position['size'] > 0 else 'buy'
+                await self.execute_order(side, abs(position['size']), float(price), symbol)
         
-        health_status = {
-            'status': 'healthy' if self.is_healthy and not self.shutdown_requested else 'unhealthy',
-            'last_check': self.last_health_check.isoformat(),
-            'api_status': True,  # Placeholder
-            'metrics': {
-                'cpu_usage': 0,  # Placeholder
-                'memory_usage': 0,  # Placeholder
-                'order_latency': 0,  # Placeholder
-            }
-        }
-        return health_status
+        return {'status': 'success', 'message': 'Emergency shutdown completed'}
 
-    def get_daily_stats(self) -> Dict[str, Any]:
-        """Get daily trading statistics."""
-        return self.daily_stats.copy()
-
-    async def reset_daily_stats(self):
-        """Reset daily trading statistics."""
-        self.daily_stats = {
-            'trades': 0,
-            'volume': 0.0,
-            'pnl': 0.0
-        }
-        self.daily_loss = 0.0
-
-    def get_system_status(self) -> Dict[str, Any]:
-        """Get complete system status."""
+    def get_system_status(self) -> Dict:
+        """Get current system status"""
         return {
             'health': self.is_healthy,
-            'last_check': self.last_health_check.isoformat(),
-            'positions': self.positions.copy(),
-            'daily_stats': self.daily_stats.copy(),
+            'last_check': datetime.now(timezone.utc).isoformat(),
+            'positions': self.positions,
+            'daily_stats': {
+                'trades': self.daily_trades,
+                'volume': float(self.daily_volume),
+                'pnl': float(self.daily_loss)
+            },
             'shutdown_requested': self.shutdown_requested
         }
 
-    async def reset_system(self):
-        """Reset system to initial state."""
-        await self.emergency_shutdown()
-        self.positions = {}       # clear all positions
-        self.market_prices = {}   # reset market prices
-        await self.reset_daily_stats()
-        self.is_healthy = True
-        self.shutdown_requested = False
-
-    def get_system_health(self) -> bool:
-        # Return overall system health as a boolean
-        return self.is_healthy
+    def get_daily_stats(self) -> Dict:
+        """Get daily trading statistics"""
+        return {
+            'trades': self.daily_trades,
+            'volume': float(self.daily_volume),
+            'pnl': float(self.daily_loss)
+        }

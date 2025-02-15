@@ -1,8 +1,9 @@
 import pytest
 import json
 import asyncio
+import time
 from unittest.mock import Mock, AsyncMock, patch
-from websockets.exceptions import ConnectionClosed
+from websockets.exceptions import ConnectionClosedError as ConnectionClosed
 from datetime import datetime, timedelta
 from ...src.trading.websocket_handler import WebSocketHandler
 
@@ -271,3 +272,74 @@ async def test_websocket_health_monitoring_integration(
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
+
+"""Test websocket handler integration"""
+import pytest
+import asyncio
+import json
+import logging
+from decimal import Decimal
+from datetime import datetime, timezone
+from typing import Dict, Any, Optional
+from unittest.mock import AsyncMock, MagicMock
+
+class TestWebSocketHandler:
+    @pytest.fixture
+    def mock_health_monitor(self):
+        """Create mock health monitor"""
+        mock = AsyncMock()
+        mock.record_latency = AsyncMock()
+        mock.record_error = AsyncMock()
+        return mock
+        
+    @pytest.fixture
+    def message_handler(self):
+        """Create message handler fixture"""
+        async def handler(message: Dict[str, Any]) -> None:
+            pass
+        return handler
+        
+    @pytest.fixture
+    def websocket_uri(self):
+        """Test websocket URI"""
+        return "wss://test.example.com/ws"
+
+    @pytest.mark.asyncio
+    async def test_connect_success(self, mock_health_monitor, message_handler, websocket_uri):
+        """Test successful websocket connection"""
+        from crypto_j_trader.src.trading.websocket_handler import WebSocketHandler
+        handler = WebSocketHandler(websocket_uri, mock_health_monitor, message_handler)
+        
+        assert handler.uri == websocket_uri
+        assert handler.health_monitor == mock_health_monitor
+        assert handler.message_handler == message_handler
+        assert not handler.is_connected
+
+    @pytest.mark.asyncio
+    async def test_message_send(self, mock_health_monitor, message_handler, websocket_uri):
+        """Test message sending"""
+        handler = WebSocketHandler(websocket_uri, mock_health_monitor, message_handler)
+        message = {"type": "test", "data": "test_data"}
+        
+        # Test sending without connection
+        success = await handler.send_message(message)
+        assert not success
+
+        # Test sending after connection
+        handler.is_connected = True
+        handler.websocket = AsyncMock()
+        
+        success = await handler.send_message(message)
+        assert success
+        handler.websocket.send.assert_called_once_with(json.dumps(message))
+
+    @pytest.mark.asyncio
+    async def test_subscribe(self, mock_health_monitor, message_handler, websocket_uri):
+        """Test channel subscription"""
+        handler = WebSocketHandler(websocket_uri, mock_health_monitor, message_handler)
+        handler.websocket = AsyncMock()
+        handler.is_connected = True
+        
+        success = await handler.subscribe("test_channel")
+        assert success
+        assert "test_channel" in handler.subscriptions

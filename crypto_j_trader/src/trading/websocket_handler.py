@@ -6,9 +6,13 @@ import time
 import random
 from typing import Dict, Set, Optional, Callable, Any
 from datetime import datetime, timedelta, timezone
-from websockets.exceptions import ConnectionClosed, InvalidStatusCode
+from websockets.client import connect
+from websockets.exceptions import ConnectionClosedError as ConnectionClosed
+from websockets.exceptions import InvalidStatusCode
 
 class WebSocketHandler:
+    """Handles WebSocket connections and message processing"""
+    
     def __init__(self, 
                  uri: str,
                  health_monitor: Any,
@@ -29,7 +33,7 @@ class WebSocketHandler:
         self.ping_interval = ping_interval
         self.logger = logging.getLogger(__name__)
         
-        self.websocket: Optional[websockets.WebSocketClientProtocol] = None
+        self.websocket = None
         self.subscriptions: Set[str] = set()
         self.is_connected = False
         self.should_reconnect = True
@@ -37,6 +41,7 @@ class WebSocketHandler:
         self.connection_attempts = 0
         self.max_reconnect_delay = 300  # Maximum reconnection delay in seconds
         self.connection_tasks = set()
+        self._is_connecting = False
 
     def _start_background_tasks(self) -> None:
         """Start background tasks for connection management."""
@@ -74,7 +79,7 @@ class WebSocketHandler:
             self.logger.info(f"Attempting connection to {self.uri}")
             start_time = time.time()
             
-            self.websocket = await websockets.connect(
+            self.websocket = await connect(
                 self.uri,
                 ping_interval=self.ping_interval,
                 ping_timeout=self.ping_interval // 2
@@ -289,7 +294,20 @@ class WebSocketHandler:
         """
         try:
             if not self.is_connected:
-                await self.connect()
+                if not self._is_connecting:
+                    self._is_connecting = True
+                    try:
+                        await self.connect()
+                    finally:
+                        self._is_connecting = False
+                else:
+                    # Wait for connection to complete
+                    for _ in range(30):  # 3 second timeout
+                        if self.is_connected:
+                            break
+                        await asyncio.sleep(0.1)
+                    if not self.is_connected:
+                        return False
 
             if self.websocket:
                 start_time = time.time()

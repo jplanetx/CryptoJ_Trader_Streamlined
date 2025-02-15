@@ -1,24 +1,39 @@
 #!/bin/bash
+# Monitor script for paper trading transition
 
-# Set the path to the project directory
-PROJECT_DIR="/mnt/c/Projects/CryptoJ_Trader_New/crypto_j_trader"
+# Configuration
+METRICS_DIR="data/metrics"
+LOG_FILE="paper_trading.log"
+CHECK_INTERVAL=60  # seconds
 
-# Set the path to the configuration file
-CONFIG_FILE="$PROJECT_DIR/paper_config.json"
+# Function to check component health
+check_health() {
+    local errors=0
+    local warnings=0
+    
+    # Check trading bot status
+    if ! python -m crypto_j_trader.src.tools.check_health; then
+        ((errors++))
+    fi
+    
+    # Check metrics
+    if [ -f "$METRICS_DIR/health_metrics.json" ]; then
+        # Count errors and warnings from metrics
+        local metrics_errors=$(jq '.error_count' "$METRICS_DIR/health_metrics.json")
+        local metrics_warnings=$(jq '.warning_count' "$METRICS_DIR/health_metrics.json")
+        ((errors+=metrics_errors))
+        ((warnings+=metrics_warnings))
+    fi
+    
+    # Report status
+    echo "$(date): Health check - Errors: $errors, Warnings: $warnings"
+    
+    return $errors
+}
 
-# Set the path to the main script
-MAIN_SCRIPT="$PROJECT_DIR/main.py"
-
-# Set the path to output file
-OUTPUT_FILE="$PROJECT_DIR/monitor_output.txt"
-
-while true
-do
-  if [ -f "$MAIN_SCRIPT" ]; then
-    python3 "$MAIN_SCRIPT" --config "$CONFIG_FILE" --status > "$OUTPUT_FILE"
-    echo "System status updated in $OUTPUT_FILE at $(date)"
-  else
-    echo "Error: Main script not found at $MAIN_SCRIPT"
-  fi
-  sleep 300
+# Main monitoring loop
+echo "Starting monitoring at $(date)"
+while true; do
+    check_health
+    sleep $CHECK_INTERVAL
 done
