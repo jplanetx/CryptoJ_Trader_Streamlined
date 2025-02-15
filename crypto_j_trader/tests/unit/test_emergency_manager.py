@@ -4,7 +4,7 @@ import asyncio
 from decimal import Decimal
 from typing import Dict, Any
 from datetime import datetime
-from ...src.trading.emergency_manager import EmergencyManager
+from crypto_j_trader.src.trading.emergency_manager import EmergencyManager
 
 @pytest.fixture
 def config_emergency() -> Dict[str, Any]:
@@ -28,7 +28,13 @@ def config_emergency() -> Dict[str, Any]:
 @pytest.fixture
 def emergency_manager(config_emergency: Dict[str, Any]) -> EmergencyManager:
     """Create EmergencyManager instance for testing"""
-    return EmergencyManager(config=config_emergency)
+    em = EmergencyManager(config=config_emergency)
+    asyncio.run(em.load_state())
+    return em
+
+    def setup_method(self):
+        """Setup method to reset state before each test"""
+        asyncio.run(self.emergency_manager.reset_state())
 
 @pytest.mark.asyncio
 async def test_validate_new_position(emergency_manager: EmergencyManager) -> None:
@@ -52,10 +58,10 @@ async def test_validate_new_position(emergency_manager: EmergencyManager) -> Non
 @pytest.mark.asyncio
 async def test_emergency_shutdown(emergency_manager: EmergencyManager) -> None:
     """Test emergency shutdown functionality"""
-    # Trigger shutdown
-    emergency_manager.emergency_shutdown = True
+    # Trigger shutdown by calling the method instead of assigning a boolean
+    await emergency_manager.emergency_shutdown()
     await emergency_manager.save_state()
-    
+
     # Validate positions are rejected during shutdown
     result = await emergency_manager.validate_new_position(
         trading_pair="BTC-USD",
@@ -66,7 +72,9 @@ async def test_emergency_shutdown(emergency_manager: EmergencyManager) -> None:
 
     # Verify state persistence
     loaded_state = await emergency_manager.load_state()
-    assert loaded_state.get('emergency_shutdown') is True
+    if not loaded_state:
+        loaded_state = {}
+    assert loaded_state.get('emergency_mode') is True
 
 @pytest.mark.asyncio
 async def test_system_health(emergency_manager: EmergencyManager) -> None:

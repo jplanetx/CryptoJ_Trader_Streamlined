@@ -1,7 +1,7 @@
 """
 Core trading functionality implementation
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional, Union
 import logging
 from decimal import Decimal
@@ -66,67 +66,81 @@ class TradingBot:
     async def execute_order(self, side: str, size: float, price: float, symbol: str) -> Dict:
         """Execute a trade order"""
         try:
-            # Convert to decimals
-            size_dec = Decimal(str(size))
-            price_dec = Decimal(str(price))
-            
-            # Basic validation
-            if size_dec <= 0:
-                return {'status': 'error', 'message': 'Invalid size'}
-            if price_dec <= 0:
-                return {'status': 'error', 'message': 'Invalid price'}
-                
-            # Check daily loss limit
-            if self.daily_loss <= -self.config['risk_management'].get('max_daily_loss', float('inf')):
-                return {'status': 'error', 'message': 'daily loss limit exceeded'}
-                
-            # Check position size limit
-            position = await self.get_position(symbol)
-            new_size = position['size'] + size_dec if side.lower() == 'buy' else position['size'] - size_dec
-            if abs(new_size) > self.config['risk_management'].get('max_position_size', float('inf')):
-                return {'status': 'error', 'message': 'position size limit exceeded'}
-                
-            # Execute order through executor
-            result = await self.order_executor.execute_order(side, size_dec, price_dec, symbol)
-            
-            # If paper trading, always return successful fill
+            size_dec, price_dec = self._convert_to_decimals(size, price)
+            validation_error = self._validate_order(size_dec, price_dec, symbol, side)
+            if validation_error:
+                return validation_error
+
+            result = await self._execute_order_through_executor(side, size_dec, price_dec, symbol)
             if self.paper_trading:
-                result = {
-                    'status': 'filled',
-                    'order_id': f'paper-{len(self.positions)}-{datetime.now().timestamp()}',
-                    'symbol': symbol,
-                    'side': side,
-                    'size': str(size_dec),
-                    'price': str(price_dec)
-                }
-            
-            # Update daily stats on success
+                result = self._simulate_paper_trade(side, size_dec, price_dec, symbol)
+
             if result['status'] == 'filled':
-                self.daily_trades += 1
-                self.daily_volume += size_dec * price_dec
-                
-                # Update position tracking
-                if symbol not in self.positions:
-                    self.positions[symbol] = {
-                        'size': Decimal('0'),
-                        'entry_price': Decimal('0')
-                    }
-                
-                pos = self.positions[symbol]
-                if side.lower() == 'buy':
-                    total_value = (pos['size'] * pos['entry_price'] + size_dec * price_dec)
-                    pos['size'] += size_dec
-                    pos['entry_price'] = total_value / pos['size'] if pos['size'] > 0 else Decimal('0')
-                else:
-                    pos['size'] -= size_dec
-                    if pos['size'] == 0:
-                        pos['entry_price'] = Decimal('0')
-                
+                self._update_daily_stats(size_dec, price_dec)
+                self._update_position_tracking(symbol, side, size_dec, price_dec)
+
             return result
-            
+
         except Exception as e:
             logger.error(f"Order execution error: {str(e)}")
             return {'status': 'error', 'message': str(e)}
+
+    from typing import Tuple
+
+    def _convert_to_decimals(self, size: float, price: float) -> Tuple[Decimal, Decimal]:
+        """Convert size and price to decimals"""
+        return Decimal(str(size)), Decimal(str(price))
+
+    async def _validate_order(self, size_dec: Decimal, price_dec: Decimal, symbol: str, side: str) -> Optional[Dict]:
+        """Validate order parameters"""
+        if size_dec <= 0:
+            return {'status': 'error', 'message': 'Invalid size'}
+        if price_dec <= 0:
+            return {'status': 'error', 'message': 'Invalid price'}
+        if self.daily_loss <= -self.config['risk_management'].get('max_daily_loss', float('inf')):
+            return {'status': 'error', 'message': 'daily loss limit exceeded'}
+        position = await self.get_position(symbol)
+        new_size = position['size'] + size_dec if side.lower() == 'buy' else position['size'] - size_dec
+        if abs(new_size) > self.config['risk_management'].get('max_position_size', float('inf')):
+            return {'status': 'error', 'message': 'position size limit exceeded'}
+        return None
+
+    async def _execute_order_through_executor(self, side: str, size_dec: Decimal, price_dec: Decimal, symbol: str) -> Dict:
+        """Execute order through the order executor"""
+        return await self.order_executor.execute_order(side, size_dec, price_dec, symbol)
+
+    def _simulate_paper_trade(self, side: str, size_dec: Decimal, price_dec: Decimal, symbol: str) -> Dict:
+        """Simulate a paper trade"""
+        return {
+            'status': 'filled',
+            'order_id': f'paper-{len(self.positions)}-{datetime.now().timestamp()}',
+            'symbol': symbol,
+            'side': side,
+            'size': str(size_dec),
+            'price': str(price_dec)
+        }
+
+    def _update_daily_stats(self, size_dec: Decimal, price_dec: Decimal) -> None:
+        """Update daily trading statistics"""
+        self.daily_trades += 1
+        self.daily_volume += size_dec * price_dec
+
+    def _update_position_tracking(self, symbol: str, side: str, size_dec: Decimal, price_dec: Decimal) -> None:
+        """Update position tracking"""
+        if symbol not in self.positions:
+            self.positions[symbol] = {
+                'size': Decimal('0'),
+                'entry_price': Decimal('0')
+            }
+        pos = self.positions[symbol]
+        if side.lower() == 'buy':
+            total_value = (pos['size'] * pos['entry_price'] + size_dec * price_dec)
+            pos['size'] += size_dec
+            pos['entry_price'] = total_value / pos['size'] if pos['size'] > 0 else Decimal('0')
+        else:
+            pos['size'] -= size_dec
+            if pos['size'] == 0:
+                pos['entry_price'] = Decimal('0')
 
     async def get_position(self, symbol: str) -> Dict:
         """Get current position for a symbol"""

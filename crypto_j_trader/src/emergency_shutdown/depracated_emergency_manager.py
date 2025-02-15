@@ -1,3 +1,5 @@
+# Deprecated: Duplicate implementation. Use /crypto_j_trader/src/trading/emergency_manager.py instead.
+
 class EmergencyManager:
     def __init__(self, state_file='state.json'):
         self.state_file = state_file

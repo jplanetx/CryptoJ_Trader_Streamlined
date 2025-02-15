@@ -1,123 +1,81 @@
-# Architectural Decisions Record - January 28, 2025
+# Architectural Decisions
 
 ## Overview
-This document captures key architectural decisions and next steps following a comprehensive review of the CryptoJ Trader system.
 
-## Key Decisions
+This document outlines the key architectural decisions made for the CryptoJ Trading System. It provides context and rationale for each decision to help understand the system's design and evolution.
 
-### 1. Portfolio Rebalancing Safety
-- **Decision**: Implement mutex-based synchronization for portfolio operations
-- **Rationale**: Prevent race conditions during high volatility periods
-- **Impact**: Improved system stability and transaction safety
-- **Implementation**: Add mutex locks and transaction rollback capability
+## Decision 1: Layered Architecture
 
-### 2. WebSocket Enhancement
-- **Decision**: Implement robust message queue system with persistence
-- **Rationale**: Ensure no data loss during connection issues
-- **Impact**: Improved system reliability and data consistency
-- **Implementation**: Add message buffering, heartbeat monitoring, and reconnection logic
+### Context
+The system needs to support multiple environments (development, production, test) and ensure separation of concerns.
 
-### 3. Risk Management Integration
-- **Decision**: Create unified risk event system
-- **Rationale**: Better coordination between risk management and trading operations
-- **Impact**: Enhanced system safety and risk control
-- **Implementation**: Synchronize risk parameters across components
+### Decision
+Adopt a layered architecture with distinct layers for:
+- Configuration management
+- Trading logic
+- Risk management
+- Emergency management
 
-### 4. System Monitoring
-- **Decision**: Implement comprehensive health monitoring
-- **Rationale**: Early detection of potential issues
-- **Impact**: Improved system reliability and maintenance
-- **Implementation**: Add health checks and performance metrics
+### Rationale
+This approach ensures modularity, maintainability, and scalability.
 
-## Implementation Strategy
+## Decision 2: Configuration Management
 
-### Phase 1: Core Safety (24-48 hours)
-1. Portfolio rebalancing safety mechanisms
-2. WebSocket reliability improvements
-3. Risk management integration
+### Context
+Configurations need to be managed securely and support different environments.
 
-### Phase 2: System Robustness (1-2 weeks)
-1. Enhanced monitoring system
-2. Automated testing infrastructure
-3. Documentation updates
+### Decision
+Use a layered configuration approach with environment-specific settings and secure storage for sensitive data.
 
-### Phase 3: Advanced Features (2-4 weeks)
-1. Machine learning integration
-2. Additional exchange support
-3. Performance optimizations
+### Rationale
+This ensures flexibility and security in managing configurations.
 
-## Testing Strategy
+## Decision 3: API Integration
 
-### Priority Areas
-1. Concurrent operations
-2. System recovery scenarios
-3. Edge case market conditions
-4. Performance benchmarks
+### Context
+The system integrates with the Coinbase Advanced Trade API for trading operations.
 
-### Test Implementation
-1. Unit tests for new safety mechanisms
-2. Integration tests for component interactions
-3. System-level recovery tests
-4. Performance testing suite
+### Decision
+Encapsulate API interactions in a dedicated module with robust error handling and retry mechanisms.
 
-## Documentation Requirements
+### Rationale
+This ensures reliable and maintainable integration with external APIs.
 
-### Technical Documentation
-1. Updated architecture diagrams
-2. Component interaction specifications
-3. Safety mechanism documentation
-4. Recovery procedures
+## Decision 4: Asynchronous Processing
 
-### Operational Documentation
-1. Monitoring guidelines
-2. Alert response procedures
-3. Recovery playbooks
-4. Performance tuning guide
+### Context
+The system needs to handle real-time market data and execute trades efficiently.
 
-## Risk Assessment
+### Decision
+Use asynchronous processing for market data handling and trade execution.
 
-### High Priority Risks
-1. Portfolio rebalancing race conditions
-2. WebSocket connection stability
-3. Risk parameter synchronization
-4. System recovery procedures
+### Rationale
+This improves performance and responsiveness.
 
-### Mitigation Strategies
-1. Implement atomic operations
-2. Add redundancy in critical paths
-3. Enhance monitoring and alerting
-4. Improve automated recovery
+## Decision 5: Testing Strategy
 
-## Success Metrics
+### Context
+The system requires thorough testing to ensure reliability and correctness.
 
-### System Stability
-1. Reduced error rates
-2. Improved recovery times
-3. Better system uptime
+### Decision
+Adopt a comprehensive testing strategy with unit tests, integration tests, and end-to-end tests.
 
-### Performance
-1. Reduced latency
-2. Improved throughput
-3. Lower resource usage
+### Rationale
+This ensures the system is robust and reliable.
 
-### Risk Management
-1. Better risk parameter adherence
-2. Faster incident response
-3. Reduced trading errors
+## Additional Decisions
 
-## Next Steps
+- Use environment variables for sensitive values
+- Implement regular security checks and audits
+- Use secure backups and document recovery procedures
 
-### Immediate Actions
-1. Begin mutex implementation
-2. Start WebSocket enhancements
-3. Initialize monitoring improvements
+## Future Considerations
 
-### Review Points
-1. Daily progress checks
-2. Weekly system reviews
-3. Bi-weekly performance assessments
+- Explore additional trading pairs and markets
+- Enhance risk management strategies
+- Implement advanced monitoring and alerting
 
-### Long-term Planning
-1. Evaluate machine learning integration
-2. Plan additional exchange support
-3. Consider advanced analytics
+## Additional Resources
+
+- [Configuration Management Guide](./configuration_management.md)
+- [Deployment Guide](./deployment_guide.md)

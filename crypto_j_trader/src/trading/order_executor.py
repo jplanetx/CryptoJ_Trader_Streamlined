@@ -43,17 +43,26 @@ class OrderExecutor:
         self.orders = {}
         self._order_counter = 1000
         self._mock_mode = kwargs.get('mock_mode', False)
+        self._order_id_counter = 1000  # Initialize to 1000 so first order is order_1001
 
     def get_position(self, symbol: str) -> Dict:
         """Get current position details for a symbol."""
-        pos = self.positions.get(symbol, {
-            'size': Decimal('0'),
-            'entry_price': Decimal('0'),
-            'current_price': Decimal('0'),
-            'unrealized_pnl': Decimal('0'),
-            'stop_loss': Decimal('0')
-        })
-        return pos
+        if symbol not in self.positions:
+            return {
+                'quantity': Decimal('0'),
+                'entry_price': Decimal('0'),
+                'current_price': Decimal('0'),
+                'unrealized_pnl': Decimal('0'),
+                'stop_loss': Decimal('0')
+            }
+        pos = self.positions[symbol]
+        return {
+            "symbol": pos.symbol,
+            "quantity": float(pos.quantity),
+            "entry_price": float(pos.entry_price),
+            "stop_loss": float(pos.entry_price * Decimal("0.95") if pos.quantity > 0 else 0),
+            "timestamp": pos.timestamp.isoformat()
+        }
 
     async def execute_order(self, side: Union[str, Dict], size: Optional[float] = None, 
                           price: Optional[float] = None, symbol: Optional[str] = None) -> Dict:
@@ -134,73 +143,85 @@ class OrderExecutor:
     async def create_order(self, side, quantity, price, symbol):
         """Create a new order with position tracking"""
         try:
-            # Input validation
-            if not symbol or not isinstance(symbol, str):
-                raise ValueError("Invalid symbol")
-            if not quantity or quantity <= 0:
-                raise ValueError("Invalid quantity")
-            if price is not None and price <= 0:
-                raise ValueError("Invalid price")
-            if side not in ['buy', 'sell']:
-                raise ValueError("Invalid side - must be 'buy' or 'sell'")
-                
-            # Generate order ID and create order
+            self._validate_order_input(side, quantity, price, symbol)
             order_id = self._generate_order_id()
-            order = {
-                "status": "success",
-                "order_id": order_id,
-                "symbol": symbol,
-                "side": side,
-                "quantity": quantity,
-                "price": price,
-                "timestamp": datetime.now().isoformat()
-            }
-            
-            # Store order
+            order = self._create_order_dict(order_id, side, quantity, price, symbol)
             self.orders[order_id] = order
-            
-            # Update position
-            quantity_dec = Decimal(str(quantity))
-            price_dec = Decimal(str(price)) if price else Decimal('0')
-            
-            if side == 'buy':
-                if symbol in self.positions:
-                    # Update existing position
-                    pos = self.positions[symbol]
-                    new_quantity = pos.quantity + quantity_dec
-                    avg_price = ((pos.quantity * pos.entry_price) + (quantity_dec * price_dec)) / new_quantity
-                    self.positions[symbol] = Position(symbol, new_quantity, avg_price, datetime.now())
-                else:
-                    # Create new position
-                    self.positions[symbol] = Position(symbol, quantity_dec, price_dec, datetime.now())
-            else:  # sell
-                if symbol not in self.positions:
-                    raise ValueError(f"No position exists for {symbol}")
-                pos = self.positions[symbol]
-                if quantity_dec > pos.quantity:
-                    raise ValueError(f"Insufficient position size: {pos.quantity} < {quantity_dec}")
-                # Update position
-                new_quantity = pos.quantity - quantity_dec
-                if new_quantity == 0:
-                    del self.positions[symbol]
-                else:
-                    self.positions[symbol] = Position(symbol, new_quantity, pos.entry_price, datetime.now())
-            
+            self._update_position(side, quantity, price, symbol)
             logger.info(f"Order created successfully: {order_id}")
-            return {
-                'status': 'success',
-                'order_id': 'mock-order-id',
-                'entry_price': price,
-                'quantity': quantity,
-                'stop_loss': price * 0.95  # simple stop loss calc
-            }
-            
+            return self._create_order_response(order_id, price, quantity)
         except Exception as e:
             logger.error(f"Order creation failed: {e}")
             return {
                 "status": "error",
-                "message": str(e)
+                "message": str(e),
+                "order_id": "ERROR" # Ensure order_id is always present
             }
+
+    def _validate_order_input(self, side, quantity, price, symbol):
+        """Validate the input parameters for creating an order."""
+        if not symbol or not isinstance(symbol, str):
+            raise ValueError("Invalid symbol")
+        if not quantity or quantity <= 0:
+            raise ValueError("Invalid quantity")
+        if price is not None and price <= 0:
+            raise ValueError("Invalid price")
+        if side not in ['buy', 'sell']:
+            raise ValueError("Invalid side - must be 'buy' or 'sell'")
+
+    def _create_order_dict(self, order_id, side, quantity, price, symbol):
+        """Create the order dictionary."""
+        return {
+            "status": "success",
+            "order_id": order_id,
+            "symbol": symbol,
+            "side": side,
+            "quantity": quantity,
+            "price": price,
+            "timestamp": datetime.now().isoformat()
+        }
+
+    def _update_position(self, side, quantity, price, symbol):
+        """Update the position based on the order."""
+        quantity_dec = Decimal(str(quantity))
+        price_dec = Decimal(str(price)) if price else Decimal('0')
+        if side == 'buy':
+            self._update_buy_position(symbol, quantity_dec, price_dec)
+        else:
+            self._update_sell_position(symbol, quantity_dec)
+
+    def _update_buy_position(self, symbol, quantity_dec, price_dec):
+        """Update the position for a buy order."""
+        if symbol in self.positions:
+            pos = self.positions[symbol]
+            new_quantity = pos.quantity + quantity_dec
+            avg_price = ((pos.quantity * pos.entry_price) + (quantity_dec * price_dec)) / new_quantity
+            self.positions[symbol] = Position(symbol, new_quantity, avg_price, datetime.now())
+        else:
+            self.positions[symbol] = Position(symbol, quantity_dec, price_dec, datetime.now())
+
+    def _update_sell_position(self, symbol, quantity_dec):
+        """Update the position for a sell order."""
+        if symbol not in self.positions:
+            raise ValueError(f"No position exists for {symbol}")
+        pos = self.positions[symbol]
+        if quantity_dec > pos.quantity:
+            raise ValueError(f"Insufficient position size: {pos.quantity} < {quantity_dec}")
+        new_quantity = pos.quantity - quantity_dec
+        if new_quantity == 0:
+            del self.positions[symbol]
+        else:
+            self.positions[symbol] = Position(symbol, new_quantity, pos.entry_price, datetime.now())
+
+    def _create_order_response(self, order_id, price, quantity):
+        """Create the response dictionary for the order."""
+        return {
+            'status': 'success',
+            'order_id': order_id,
+            'entry_price': price,
+            'quantity': quantity,
+            'stop_loss': price * 0.95  # simple stop loss calc
+        }
             
     def get_order_status(self, order_id: str) -> Dict:
         """Get status of an order with detailed information"""
@@ -229,9 +250,14 @@ class OrderExecutor:
                 "status": "error",
                 "message": f"Order not found: {order_id}"
             }
-        
-        # Remove order and return success
-        order = self.orders.pop(order_id)
+        order = self.orders[order_id]
+        # If order is filled or marked as success, simulate that it cannot be cancelled
+        if order.get("status") in ("filled", "success"):
+            return {
+                "status": "error",
+                "message": "Order already filled"
+            }
+        self.orders.pop(order_id)
         return {
             "status": "success",
             "order_id": order_id,
@@ -240,16 +266,10 @@ class OrderExecutor:
             "timestamp": datetime.now().isoformat()
         }
         
-    def get_position(self, symbol: str) -> Optional[Dict]:
-        """Get current position for a symbol"""
-        if symbol not in self.positions:
-            return None
-            
-        pos = self.positions[symbol]
-        return {
-            "symbol": pos.symbol,
-            "quantity": float(pos.quantity),
-            "entry_price": float(pos.entry_price),
-            "stop_loss": float(pos.entry_price * Decimal("0.95") if pos.quantity > 0 else 0),
-            "timestamp": pos.timestamp.isoformat()
-        }
+    async def get(self, order_id: str) -> Dict:
+        """
+        Retrieves the details of a specific order.
+        """
+        # In a real implementation, this would interact with an exchange API.
+        # This is a placeholder for the actual order retrieval logic.
+        return {'order_id': order_id, 'status': 'open'}
