@@ -50,7 +50,7 @@ async def test_end_to_end_trading_flow(order_executor):
     
     # Verify position was created
     position = order_executor.get_position("ETH-USD")
-    assert Decimal(str(position["quantity"])) == Decimal('0.5')
+    assert Decimal(str(position.size)) == Decimal('0.5')
     
     # Add to position
     buy_result2 = await order_executor.create_order(
@@ -64,10 +64,13 @@ async def test_end_to_end_trading_flow(order_executor):
     
     # Verify position was updated correctly
     position = order_executor.get_position("ETH-USD")
-    assert Decimal(str(position["quantity"])) == Decimal('0.8')
+    assert Decimal(str(position.size)) == Decimal('0.8')
     expected_avg_price = (Decimal('0.5') * Decimal('2000.0') + Decimal('0.3') * Decimal('2100.0')) / Decimal('0.8')
-    assert abs(Decimal(str(position["entry_price"])) - expected_avg_price) < Decimal('0.01')
-    assert Decimal(str(position["stop_loss"])) == expected_avg_price * Decimal('0.95')
+    assert abs(Decimal(str(position.entry_price)) - expected_avg_price) < Decimal('0.01')
+    if position.stop_loss is not None:
+        assert Decimal(str(position.stop_loss)) == expected_avg_price * Decimal('0.95')
+    else:
+        assert position.stop_loss is None
     
     # Partial position reduction
     sell_result = await order_executor.create_order(
@@ -81,9 +84,12 @@ async def test_end_to_end_trading_flow(order_executor):
     
     # Verify position was reduced
     position = order_executor.get_position("ETH-USD")
-    assert Decimal(str(position["quantity"])) == Decimal('0.5')
-    assert abs(Decimal(str(position["entry_price"])) - expected_avg_price) < Decimal('0.01')
-    assert Decimal(str(position["stop_loss"])) == expected_avg_price * Decimal('0.95')
+    assert Decimal(str(position.size)) == Decimal('0.5')
+    assert abs(Decimal(str(position.entry_price)) - expected_avg_price) < Decimal('0.01')
+    if position.stop_loss is not None:
+        assert Decimal(str(position.stop_loss)) == expected_avg_price * Decimal('0.95')
+    else:
+        assert position.stop_loss is None
 
 @pytest.mark.asyncio
 async def test_multi_pair_trading(order_executor):
@@ -154,7 +160,7 @@ async def test_full_trading_cycle(order_executor):
     )
     # Verify position
     position = order_executor.get_position("BTC-USD")
-    assert Decimal(str(position["quantity"])) == Decimal('1.0')
+    assert Decimal(str(position.size)) == Decimal('1.0')
     
     # Reduce position
     await order_executor.create_order(
@@ -165,7 +171,7 @@ async def test_full_trading_cycle(order_executor):
     )
     # Verify reduced position
     position = order_executor.get_position("BTC-USD")
-    assert Decimal(str(position["quantity"])) == Decimal('0.5')
+    assert Decimal(str(position.size)) == Decimal('0.5')
     
     # Close position
     await order_executor.create_order(
@@ -177,4 +183,4 @@ async def test_full_trading_cycle(order_executor):
     
     # Verify position is closed
     position = order_executor.get_position("BTC-USD")
-    assert Decimal(str(position["quantity"])) == Decimal('0.0')
+    assert Decimal(str(position.size)) == Decimal('0.0')

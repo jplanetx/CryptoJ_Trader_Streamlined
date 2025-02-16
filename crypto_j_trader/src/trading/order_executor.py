@@ -82,21 +82,15 @@ class OrderExecutor:
     def get_position(self, symbol: str) -> PositionInfo:
         """Get current position details for a symbol."""
         if symbol not in self.positions:
-            return {
-                'size': Decimal('0'),
-                'entry_price': Decimal('0'),
-                'unrealized_pnl': Decimal('0'),
-                'timestamp': datetime.now(),
-                'stop_loss': Decimal('0')
-            }
+            return Position(
+                symbol=symbol,
+                size=Decimal('0'),
+                entry_price=Decimal('0'),
+                timestamp=datetime.now(),
+                stop_loss=Decimal('0')
+            )
         pos = self.positions[symbol]
-        return {
-            "size": pos.size,
-            "entry_price": pos.entry_price,
-            "unrealized_pnl": Decimal('0'),  # Calculated in real implementation
-            "timestamp": pos.timestamp,
-            "stop_loss": pos.stop_loss or Decimal('0')
-        }
+        return pos
 
     async def execute_order(self, side: Union[str, Dict], size: Optional[float] = None, 
                           price: Optional[float] = None, symbol: Optional[str] = None) -> OrderResponse:
@@ -139,15 +133,13 @@ class OrderExecutor:
                 new_price = position['entry_price']
             
             # Update position
-            self.positions[symbol] = {
-                'size': new_size,
-                'entry_price': new_price,
-                'current_price': price_dec,
-                'unrealized_pnl': (price_dec - new_price) * new_size if new_size > 0 else Decimal('0'),
-                'stop_loss': new_price * Decimal('0.95') if new_size > 0 else Decimal('0')
-            }
-            
-            # Generate order response
+            if symbol in self.positions:
+                pos = self.positions[symbol]
+                pos.size = new_size
+                pos.entry_price = new_price
+            else:
+                pos = Position(symbol=symbol, size=new_size, entry_price=new_price)
+                self.positions[symbol] = pos
             self._order_counter += 1
             order_id = f'mock-order-{self._order_counter}'
             return {
@@ -258,13 +250,11 @@ class OrderExecutor:
                                 (size * price)) / new_size
                 current_position.size = new_size
                 current_position.entry_price = weighted_price
-                current_position.update_stop_loss(price, self.stop_loss_pct)
             else:
                 # Create new position
                 if size > self.max_position_size:
                     raise ValueError(f"Position size {size} exceeds maximum {self.max_position_size}")
                 position = Position(symbol=symbol, size=size, entry_price=price)
-                position.update_stop_loss(price, self.stop_loss_pct)
                 self.positions[symbol] = position
         else:  # sell
             if not current_position:
@@ -277,7 +267,6 @@ class OrderExecutor:
                 del self.positions[symbol]
             else:
                 current_position.size = new_size
-                current_position.update_stop_loss(price, self.stop_loss_pct)
 
     def _create_order_response(self, order_id, price, quantity) -> OrderResponse:
         """Create the response dictionary for the order."""
