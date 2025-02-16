@@ -42,8 +42,8 @@ async def test_end_to_end_trading_flow(order_executor):
     buy_result = await order_executor.create_order(
         symbol="ETH-USD",
         side="buy",
-        quantity=0.5,
-        price=2000.0
+        quantity=Decimal('0.5'),
+        price=Decimal('2000.0')
     )
     assert buy_result["status"] == "success"
     assert buy_result["order_id"] == "order_1001"
@@ -56,8 +56,8 @@ async def test_end_to_end_trading_flow(order_executor):
     buy_result2 = await order_executor.create_order(
         symbol="ETH-USD",
         side="buy",
-        quantity=0.3,
-        price=2100.0
+        quantity=Decimal('0.3'),
+        price=Decimal('2100.0')
     )
     assert buy_result2["status"] == "success"
     assert buy_result2["order_id"] == "order_1002"
@@ -73,8 +73,8 @@ async def test_end_to_end_trading_flow(order_executor):
     sell_result = await order_executor.create_order(
         symbol="ETH-USD",
         side="sell",
-        quantity=0.3,
-        price=2200.0
+        quantity=Decimal('0.3'),
+        price=Decimal('2200.0')
     )
     assert sell_result["status"] == "success"
     assert sell_result["order_id"] == "order_1003"
@@ -90,13 +90,13 @@ async def test_multi_pair_trading(order_executor):
     """Test trading multiple pairs simultaneously."""
     # Test multi-pair trading
     btc_order_executor = OrderExecutor(trading_pair="BTC-USD")
-    buy_btc = await btc_order_executor.create_order("buy", 1, 50000, "BTC-USD")
-    buy_eth = await order_executor.create_order("buy", 5, 3000, "ETH-USD") # Use valid symbol
+    buy_btc = await btc_order_executor.create_order(symbol="BTC-USD", side="buy", quantity=Decimal('1'), price=Decimal('50000'))
+    buy_eth = await order_executor.create_order(symbol="ETH-USD", side="buy", quantity=Decimal('5'), price=Decimal('3000'))
     assert buy_btc["status"] == "success"
     assert buy_eth["status"] == "success"
 
     btc_pos = btc_order_executor.get_position("BTC-USD")
-    eth_pos = order_executor.get_position("ETH-USD") # Use valid symbol
+    eth_pos = order_executor.get_position("ETH-USD")
     assert btc_pos is not None
     assert eth_pos is not None
 
@@ -107,13 +107,13 @@ async def test_order_tracking(order_executor):
     buy_result = await order_executor.create_order(
         symbol="ETH-USD",
         side="buy",
-        quantity=1.0,
-        price=2000.0
+        quantity=Decimal('1.0'),
+        price=Decimal('2000.0')
     )
     order_id = buy_result["order_id"]
     assert order_id == "order_1001"
     
-    # Check status (remove await since it's synchronous)
+    # Check status
     status = order_executor.get_order_status(order_id)
     assert status["status"] == "filled"
     
@@ -129,15 +129,15 @@ async def test_error_handling(order_executor):
     await order_executor.create_order(
         symbol="ETH-USD",
         side="buy",
-        quantity=0.5,
-        price=2000.0
+        quantity=Decimal('0.5'),
+        price=Decimal('2000.0')
     )
     # Create order with insufficient position size
     result = await order_executor.create_order(
         symbol="ETH-USD",
         side="sell",
-        quantity=1.0,
-        price=2000.0
+        quantity=Decimal('1.0'),
+        price=Decimal('2000.0')
     )
     assert result["status"] == "error"
     assert "Insufficient position" in result["message"]
@@ -149,8 +149,8 @@ async def test_full_trading_cycle(order_executor):
     await order_executor.create_order(
         symbol="BTC-USD",
         side="buy",
-        quantity=1.0,
-        price=50000.0
+        quantity=Decimal('1.0'),
+        price=Decimal('50000.0')
     )
     # Verify position
     position = order_executor.get_position("BTC-USD")
@@ -160,8 +160,8 @@ async def test_full_trading_cycle(order_executor):
     await order_executor.create_order(
         symbol="BTC-USD",
         side="sell",
-        quantity=0.5,
-        price=51000.0
+        quantity=Decimal('0.5'),
+        price=Decimal('51000.0')
     )
     # Verify reduced position
     position = order_executor.get_position("BTC-USD")
@@ -171,8 +171,8 @@ async def test_full_trading_cycle(order_executor):
     await order_executor.create_order(
         symbol="BTC-USD",
         side="sell",
-        quantity=0.5,
-        price=52000.0
+        quantity=Decimal('0.5'),
+        price=Decimal('52000.0')
     )
     
     # Verify position is closed

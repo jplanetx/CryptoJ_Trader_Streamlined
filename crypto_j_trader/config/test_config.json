@@ -1,0 +1,30 @@
+{
+    "api_key": "test_api_key",
+    "base_url": "https://api.testexchange.com",
+    "timeout": 30,
+    "trading_pairs": ["BTC-USD", "ETH-USD"],
+    "mock_mode": true,
+    "risk_management": {
+        "max_position_size": 5.0,
+        "max_daily_loss": 500.0,
+        "stop_loss_pct": 0.05,
+        "position_limits": {
+            "BTC-USD": 2.0,
+            "ETH-USD": 20.0
+        }
+    },
+    "paper_trading": {
+        "initial_balance": 100000.0,
+        "simulate_slippage": true,
+        "slippage_pct": 0.001
+    },
+    "market_data": {
+        "price_history_length": 100,
+        "update_interval_ms": 1000
+    },
+    "emergency_controls": {
+        "max_drawdown_pct": 10.0,
+        "volume_threshold": 1000.0,
+        "price_change_threshold_pct": 5.0
+    }
+}

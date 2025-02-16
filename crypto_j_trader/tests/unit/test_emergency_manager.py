@@ -25,81 +25,81 @@ def config_emergency() -> Dict[str, Any]:
         'state_file': "test_emergency_state.json"
     }
 
-@pytest.fixture
-def emergency_manager(config_emergency: Dict[str, Any]) -> EmergencyManager:
-    """Create EmergencyManager instance for testing"""
-    em = EmergencyManager(config=config_emergency)
-    asyncio.run(em.load_state())
-    return em
+class TestEmergencyManager:
+    @pytest.fixture
+    def emergency_manager(self, config_emergency: Dict[str, Any]) -> EmergencyManager:
+        """Create EmergencyManager instance for testing"""
+        em = EmergencyManager(config=config_emergency)
+        asyncio.run(em.reset_emergency_state())
+        return em
 
-    def setup_method(self):
+    async def setup_method(self):
         """Setup method to reset state before each test"""
-        asyncio.run(self.emergency_manager.reset_state())
+        if hasattr(self, 'emergency_manager'):
+            await self.emergency_manager.reset_emergency_state()
 
-@pytest.mark.asyncio
-async def test_validate_new_position(emergency_manager: EmergencyManager) -> None:
-    """Test position validation functionality"""
-    # Test valid position
-    result = await emergency_manager.validate_new_position(
-        trading_pair="BTC-USD",
-        size=1.0,
-        price=40000.0
-    )
-    assert result is True, "Valid position should be accepted"
+    @pytest.mark.asyncio
+    async def test_validate_new_position(self, emergency_manager: EmergencyManager) -> None:
+        """Test position validation functionality"""
+        # Test valid position
+        result = await emergency_manager.validate_new_position(
+            trading_pair="BTC-USD",
+            size=1.0,
+            price=40000.0
+        )
+        assert result is True, "Valid position should be accepted"
 
-    # Test exceeding position limit
-    result = await emergency_manager.validate_new_position(
-        trading_pair="BTC-USD",
-        size=60.0,
-        price=40000.0
-    )
-    assert result is False, "Position exceeding limits should be rejected"
+        # Test exceeding position limit
+        result = await emergency_manager.validate_new_position(
+            trading_pair="BTC-USD",
+            size=60.0,
+            price=40000.0
+        )
+        assert result is False, "Position exceeding limits should be rejected"
 
-@pytest.mark.asyncio
-async def test_emergency_shutdown(emergency_manager: EmergencyManager) -> None:
-    """Test emergency shutdown functionality"""
-    # Trigger shutdown by calling the method instead of assigning a boolean
-    await emergency_manager.emergency_shutdown()
-    await emergency_manager.save_state()
+    @pytest.mark.asyncio
+    async def test_emergency_shutdown(self, emergency_manager: EmergencyManager) -> None:
+        """Test emergency shutdown functionality"""
+        # Trigger shutdown
+        await emergency_manager.emergency_shutdown()
+        await emergency_manager.save_state()
 
-    # Validate positions are rejected during shutdown
-    result = await emergency_manager.validate_new_position(
-        trading_pair="BTC-USD",
-        size=1.0,
-        price=40000.0
-    )
-    assert result is False, "Positions should be rejected during shutdown"
+        # Validate positions are rejected during shutdown
+        result = await emergency_manager.validate_new_position(
+            trading_pair="BTC-USD",
+            size=1.0,
+            price=40000.0
+        )
+        assert result is False, "Positions should be rejected during shutdown"
 
-    # Verify state persistence
-    loaded_state = await emergency_manager.load_state()
-    if not loaded_state:
-        loaded_state = {}
-    assert loaded_state.get('emergency_mode') is True
+        # Verify state persistence
+        loaded_state = await emergency_manager.load_state()
+        assert loaded_state.get('emergency_mode') is True
 
-@pytest.mark.asyncio
-async def test_system_health(emergency_manager: EmergencyManager) -> None:
-    """Test system health monitoring"""
-    health_status = await emergency_manager.get_system_health()
-    assert isinstance(health_status, dict)
-    assert 'status' in health_status
-    assert 'last_check' in health_status
-    assert 'metrics' in health_status
+    @pytest.mark.asyncio
+    async def test_system_health(self, emergency_manager: EmergencyManager) -> None:
+        """Test system health monitoring"""
+        health_status = await emergency_manager.get_system_health()
+        assert isinstance(health_status, dict)
+        assert 'status' in health_status
+        assert 'last_check' in health_status
+        assert 'metrics' in health_status
 
-@pytest.mark.asyncio
-async def test_risk_controls(emergency_manager: EmergencyManager) -> None:
-    """Test risk control functionality"""
-    # Test within limits
-    result = await emergency_manager.validate_new_position(
-        trading_pair="BTC-USD",
-        size=1.0,
-        price=40000.0
-    )
-    assert result is True
+    @pytest.mark.asyncio
+    async def test_risk_controls(self, emergency_manager: EmergencyManager) -> None:
+        """Test risk control functionality"""
+        # Test within limits
+        result = await emergency_manager.validate_new_position(
+            trading_pair="BTC-USD",
+            size=1.0,
+            price=40000.0
+        )
+        assert result is True
 
-    # Test position value limit
-    result = await emergency_manager.validate_new_position(
-        trading_pair="BTC-USD",
-        size=100.0,
-        price=40000.0
-    )
-    assert result is False
+        # Test position value limit
+        result = await emergency_manager.validate_new_position(
+            trading_pair="BTC-USD",
+            size=100.0,
+            price=40000.0
+        )
+        assert result is False

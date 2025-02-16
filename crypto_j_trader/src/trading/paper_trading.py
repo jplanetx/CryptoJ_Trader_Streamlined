@@ -102,135 +102,134 @@ class Position:
             'last_update': self.last_update_time.isoformat()
         }
 
-class PaperTrader:
-    """Handles paper trading simulation with position tracking"""
+"""Paper trading implementation with consistent configuration and position management"""
+from decimal import Decimal
+from typing import Dict, Optional, Any, Union
+from datetime import datetime
+import logging
+
+from .config_manager import ConfigManager
+from .order_executor import OrderExecutor, Position, OrderResponse
+
+logger = logging.getLogger(__name__)
+
+class PaperTradingExecutor(OrderExecutor):
+    """Paper trading implementation of OrderExecutor"""
     
-    def __init__(self, config: Dict, *args, **kwargs):
-        """Initialize paper trader with configuration"""
-        self.config = config
-        self.positions: Dict[str, Position] = {}
-        self.orders = {}
-        self.order_counter = 1000
-        self.market_data = {}
-        self.initial_capital = Decimal(str(self.config.get('initial_capital', '100000')))
-        self.current_capital = self.initial_capital
-        self.daily_pnl = Decimal('0')
-        self.max_position_size = Decimal(str(self.config.get('risk_management', {}).get('max_position_size', '10')))
-        self.timeout = self.config.get('timeout', 30)
+    def __init__(self, trading_pair: str):
+        super().__init__(trading_pair=trading_pair, mock_mode=True)
+        self.config = ConfigManager()
+        test_config = self.config.get_test_config()
         
-    async def execute_order(self, side: str, size: Union[float, Decimal], price: Union[float, Decimal], symbol: str) -> Dict:
+        # Safely extract paper trading config
+        paper_config = test_config.get('paper_trading', {})
+        if not isinstance(paper_config, dict):
+            paper_config = {}
+            
+        # Initialize with safe defaults
+        self.initial_balance = self._safe_decimal(
+            paper_config.get('initial_balance'),
+            default=100000.0
+        )
+        self.simulate_slippage = bool(paper_config.get('simulate_slippage', True))
+        self.slippage_pct = self._safe_decimal(
+            paper_config.get('slippage_pct'),
+            default=0.001
+        )
+        
+        self.balance = self.initial_balance
+        self.positions: Dict[str, Position] = {}
+        self.order_history: Dict[str, OrderResponse] = {}
+        
+    def _safe_decimal(self, value: Optional[Union[int, float, str, Decimal]], default: float) -> Decimal:
+        """Safely convert a value to Decimal with fallback"""
+        try:
+            if value is None:
+                return Decimal(str(default))
+            return Decimal(str(value))
+        except (TypeError, ValueError):
+            return Decimal(str(default))
+
+    async def execute_order(self, side: str, size: float, price: float, symbol: str) -> OrderResponse:
         """Execute a paper trading order"""
         try:
-            # Convert inputs to Decimal
+            # Validate parameters through parent class method
+            self._validate_order_input(side, size, price, symbol)
+            
+            # Convert to Decimal for precise calculations
             size_dec = Decimal(str(size))
             price_dec = Decimal(str(price))
             
-            # Validate order
-            if size_dec <= 0:
-                raise ValueError("Invalid order size")
-            if price_dec <= 0:
-                raise ValueError("Invalid order price")
-                
-            # Get or create position
-            if symbol not in self.positions:
-                self.positions[symbol] = Position(symbol)
-            position = self.positions[symbol]
-            
-            # Check position limits for buys
-            if side.lower() == 'buy':
-                new_position_size = position.size + size_dec
-                if new_position_size > self.max_position_size:
-                    raise ValueError("Position size limit exceeded")
-            else:  # Selling
-                if size_dec > position.size:
-                    raise ValueError("Insufficient position size")
+            # Apply simulated slippage if enabled
+            if self.simulate_slippage:
+                if side == 'buy':
+                    price_dec *= (1 + self.slippage_pct)
+                else:
+                    price_dec *= (1 - self.slippage_pct)
                     
-            # Update position
-            if side.lower() == 'buy':
-                total_value = (position.size * position.entry_price + size_dec * price_dec)
-                new_size = position.size + size_dec
-                position.size = new_size
-                position.entry_price = total_value / new_size if new_size > 0 else Decimal('0')
+            # Calculate order cost
+            order_cost = size_dec * price_dec
+            
+            # Validate balance for buys
+            if side == 'buy':
+                if order_cost > self.balance:
+                    return self._create_error_response("Insufficient balance", symbol=symbol)
+                self.balance -= order_cost
             else:
-                realized_pnl = (price_dec - position.entry_price) * size_dec
-                position.realized_pnl += realized_pnl
-                position.size -= size_dec
-                if position.size == 0:
-                    position.entry_price = Decimal('0')
-                    position.stop_loss = Decimal('0')
+                # For sells, validate position exists and is sufficient
+                current_position = self.get_position(symbol)
+                if current_position['size'] < size_dec:
+                    return self._create_error_response("Insufficient position size", symbol=symbol)
+                self.balance += order_cost
+                
+            # Update position
+            try:
+                self._update_position(symbol, side, size_dec, price_dec)
+            except ValueError as e:
+                # Rollback balance changes if position update fails
+                if side == 'buy':
+                    self.balance += order_cost
+                else:
+                    self.balance -= order_cost
+                return self._create_error_response(str(e), symbol=symbol)
+                
+            # Generate order ID and create response
+            order_id = self._generate_order_id()
             
-            position.current_price = price_dec
-            position.unrealized_pnl = (price_dec - position.entry_price) * position.size
-            if position.size > 0:
-                position.stop_loss = position.entry_price * Decimal('0.95')
-            
-            # Record trade
-            trade = {
+            response = {
+                'status': 'success',
+                'order_id': order_id,
                 'symbol': symbol,
-                'side': side.lower(),
+                'side': side,
                 'size': str(size_dec),
                 'price': str(price_dec),
-                'timestamp': datetime.now(timezone.utc).isoformat()
+                'type': 'market',
+                'timestamp': datetime.now().isoformat(),
+                'message': None
             }
-            position.trades.append(trade)
             
-            # Generate order ID and record
-            self.order_counter += 1
-            order_id = f'paper-order-{self.order_counter}'
-            order_record = {
-                'id': order_id,
-                'symbol': symbol,
-                'side': side.lower(),
-                'size': str(size_dec),
-                'price': str(price_dec),
-                'timestamp': datetime.now(timezone.utc).isoformat(),
-                'status': 'filled'
-            }
-            self.orders[order_id] = order_record
-            
-            return order_record
+            self.order_history[order_id] = response
+            return response
             
         except Exception as e:
             logger.error(f"Paper trading order execution error: {str(e)}")
-            return {
-                'status': 'error',
-                'message': str(e),
-                'symbol': symbol
-            }
-            
-    def get_position(self, symbol: str) -> Position:
-        """Get current position for a symbol"""
-        if symbol not in self.positions:
-            self.positions[symbol] = Position(symbol)
-        return self.positions[symbol]
+            return self._create_error_response(str(e), symbol=symbol)
 
-    def get_position_info(self, symbol: str) -> Dict:
-        """Get position information as a dictionary"""
-        position = self.get_position(symbol)
-        return position.to_dict()
+    def get_balance(self) -> Decimal:
+        """Get current paper trading balance"""
+        return self.balance
         
-    def get(self, order_id: str, default: Any = None) -> Optional[Dict]:
-        """Get order details by ID"""
-        return self.orders.get(order_id, default)
-
-    def place_order(self, order: Dict) -> Dict:
-        """Place a new order"""
-        try:
-            symbol = order['symbol']
-            side = order['side']
-            quantity = Decimal(str(order['quantity']))
-            price = Decimal(str(order.get('price', self.market_data.get(symbol, '50000'))))
-            
-            return self.execute_order(side, quantity, price, symbol)
-            
-        except Exception as e:
-            logger.error(f"Order placement error: {str(e)}")
-            return {
-                'status': 'error',
-                'message': str(e)
-            }
-
-    def integrate_risk_controls(self, risk_controls: Dict) -> None:
-        """Integrate risk control parameters"""
-        if 'max_position_size' in risk_controls:
-            self.max_position_size = Decimal(str(risk_controls['max_position_size']))
+    def get_total_value(self) -> Decimal:
+        """Get total portfolio value including positions"""
+        total = self.balance
+        for pos in self.positions.values():
+            # In real implementation, would use current market price
+            total += pos.size * pos.entry_price
+        return total
+        
+    def reset(self) -> None:
+        """Reset paper trading state"""
+        self.balance = self.initial_balance
+        self.positions.clear()
+        self.order_history.clear()
+        self._order_counter = 1000

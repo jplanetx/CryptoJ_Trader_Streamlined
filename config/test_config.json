@@ -1,4 +1,33 @@
 {
+    "trading_pair": "BTC-USD",
+    "risk": {
+        "max_position_size": 0.01,
+        "stop_loss_percentage": 2.0,
+        "max_daily_trades": 10
+    },
+    "initial_capital": 230,
+    "target_capital": 20000,
+    "days_target": 90,
+    "paper_trading": true,
+    "trading_pairs": [
+        {"pair": "BTC-USD", "weight": 0.6, "precision": 8}
+    ],
+    "risk_management": {
+        "daily_loss_limit": 0.02,
+        "position_size_limit": 0.1,
+        "stop_loss_pct": 0.05,
+        "max_position_size": 0.01,
+        "max_daily_trades": 10
+    },
+    "execution": {
+        "interval_seconds": 60
+    },
+    "websocket": {
+        "uri": "wss://ws-feed.exchange.coinbase.com",
+        "enabled": true,
+        "ping_interval": 30,
+        "max_reconnect_delay": 300
+    },
     "max_positions": {
         "BTC-USD": 50000,
         "ETH-USD": 25000
@@ -10,19 +39,10 @@
     "emergency_thresholds": {
         "max_latency": 1000,
         "market_data_max_age": 60,
-        "min_available_funds": 1000.0,
-        "BTC-USD": 100000,
-        "ETH-USD": 50000
-    },
-    "trading": {
-        "max_position_size": 100000,
-        "min_order_size": 10.0
+        "min_available_funds": 1000.0
     },
     "monitoring": {
         "health_check_interval": 60,
         "state_save_interval": 300
-    },
-    "position_limit": 50000,
-    "state_file": "test_emergency_state.json",
-    "risk_factor": 0.02
+    }
 }

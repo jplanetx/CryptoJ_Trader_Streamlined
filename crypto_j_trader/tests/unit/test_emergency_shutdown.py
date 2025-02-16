@@ -4,91 +4,84 @@ from pathlib import Path
 from datetime import datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch, Mock
+from typing import Dict, Any, Optional
 from ...src.trading.emergency_manager import EmergencyManager
 
 @pytest.fixture
-def config_file(tmp_path):
+def config_file(tmp_path) -> Dict[str, Any]:
     """Create a temporary config file."""
-    config = {
-        'max_positions': {
-            'BTC-USD': 10.0,
-            'ETH-USD': 100.0
-        },
-        'risk_limits': {
-            'BTC-USD': 50000.0,
-            'ETH-USD': 20000.0
-        },
+    return {
         'emergency_thresholds': {
-            'BTC-USD': 100000.0,
-            'ETH-USD': 50000.0
+            'position_limit': Decimal('50000'),
+            'risk_factor': Decimal('0.02'),
+            'max_latency': 1000,
+            'market_data_max_age': 60,
+            'min_available_funds': Decimal('1000.0')
+        },
+        'trading': {
+            'max_position_size': Decimal('100000'),
+            'min_order_size': Decimal('10.0')
+        },
+        'monitoring': {
+            'health_check_interval': 60,
+            'state_save_interval': 300
         }
     }
-    config_path = tmp_path / "test_config.json"
-    with open(config_path, 'w') as f:
-        json.dump(config, f)
-    return str(config_path)
 
 @pytest.fixture
-def state_file(tmp_path):
+def state_file(tmp_path) -> str:
     """Create a temporary state file path."""
-    return str(tmp_path / "emergency_state.json")
+    return str(tmp_path / "test_emergency_state.json")
 
 @pytest.fixture
-def emergency_manager():
-    dummy_config = {"shutdown_threshold": 0.1, "recovery_time": 60, "max_positions": {}, "risk_limits": {}}
-    # Provide a temporary state file path (could be a dummy or temp file)
-    state_file = "dummy_state.json"
-    return EmergencyManager(config=dummy_config, state_file=state_file)
+def emergency_manager(config_file: Dict[str, Any], state_file: str) -> EmergencyManager:
+    return EmergencyManager(config=config_file, state_file=state_file)
 
 @pytest.mark.asyncio
-async def test_validate_new_position_normal(emergency_manager):
+async def test_validate_new_position_normal(emergency_manager: EmergencyManager) -> None:
     """Test position validation under normal conditions."""
     result = await emergency_manager.validate_new_position(
-        'BTC-USD', 
-        size=1.0, 
-        price=40000.0
+        trading_pair='BTC-USD',
+        size=Decimal('1.0'),
+        price=Decimal('40000.0')
     )
     assert result is True
 
 @pytest.mark.asyncio
-async def test_validate_new_position_emergency_mode(emergency_manager):
+async def test_validate_new_position_emergency_mode(emergency_manager: EmergencyManager) -> None:
     """Test position validation during emergency mode."""
     emergency_manager.emergency_mode = True
     result = await emergency_manager.validate_new_position(
-        'BTC-USD',
-        size=1.0,
-        price=40000.0
+        trading_pair='BTC-USD',
+        size=Decimal('1.0'),
+        price=Decimal('40000.0')
     )
     assert result is False
 
 @pytest.mark.asyncio
-async def test_validate_new_position_exceeds_limit(emergency_manager):
+async def test_validate_new_position_exceeds_limit(emergency_manager: EmergencyManager) -> None:
     """Test position validation when exceeding position limits."""
-    # Setup current position
-    emergency_manager.position_limits['BTC-USD'] = Decimal('9.5')
-    
     result = await emergency_manager.validate_new_position(
-        'BTC-USD',
-        size=1.0,  # Would exceed max position of 10
-        price=40000.0
+        trading_pair='BTC-USD',
+        size=Decimal('60.0'),  # Exceeds configured limit
+        price=Decimal('40000.0')
     )
     assert result is False
 
 @pytest.mark.asyncio
-async def test_validate_new_position_exceeds_risk(emergency_manager):
+async def test_validate_new_position_exceeds_risk(emergency_manager: EmergencyManager) -> None:
     """Test position validation when exceeding risk limits."""
     result = await emergency_manager.validate_new_position(
-        'BTC-USD',
-        size=2.0,
-        price=30000.0  # Total value 60000 > risk limit 50000
+        trading_pair='BTC-USD',
+        size=Decimal('25.0'),  # High value position
+        price=Decimal('40000.0')
     )
     assert result is False
 
 @pytest.mark.asyncio
-async def test_emergency_shutdown(emergency_manager):
+async def test_emergency_shutdown(emergency_manager: EmergencyManager) -> None:
     """Test emergency shutdown procedure."""
     await emergency_manager.emergency_shutdown()
-    
     assert emergency_manager.emergency_mode is True
     assert emergency_manager.position_limits == {}
     
@@ -98,7 +91,7 @@ async def test_emergency_shutdown(emergency_manager):
         assert state['emergency_mode'] is True
 
 @pytest.mark.asyncio
-async def test_restore_normal_operation(emergency_manager):
+async def test_restore_normal_operation(emergency_manager: EmergencyManager) -> None:
     """Test restoration of normal operation."""
     emergency_manager.emergency_mode = True
     result = await emergency_manager.restore_normal_operation()
@@ -106,18 +99,18 @@ async def test_restore_normal_operation(emergency_manager):
     assert result is True
     assert emergency_manager.emergency_mode is False
 
-def test_update_position_limits(emergency_manager):
+def test_update_position_limits(emergency_manager: EmergencyManager) -> None:
     """Test position limit updates."""
     new_limits = {
-        'BTC-USD': 5.0,
-        'ETH-USD': 50.0
+        'BTC-USD': Decimal('5.0'),
+        'ETH-USD': Decimal('50.0')
     }
     emergency_manager.update_position_limits(new_limits)
     
     assert emergency_manager.position_limits['BTC-USD'] == Decimal('5.0')
     assert emergency_manager.position_limits['ETH-USD'] == Decimal('50.0')
 
-def test_get_system_health(emergency_manager):
+def test_get_system_health(emergency_manager: EmergencyManager) -> None:
     """Test system health status retrieval."""
     emergency_manager.position_limits = {
         'BTC-USD': Decimal('5.0'),
@@ -130,7 +123,7 @@ def test_get_system_health(emergency_manager):
     assert 'position_limits' in health_status
     assert isinstance(health_status['position_limits']['BTC-USD'], float)
 
-def test_load_invalid_config(tmp_path):
+def test_load_invalid_config(tmp_path) -> None:
     """Test handling of invalid configuration file."""
     invalid_config = tmp_path / "invalid_config.json"
     with open(invalid_config, 'w') as f:
@@ -140,7 +133,7 @@ def test_load_invalid_config(tmp_path):
         EmergencyManager(str(invalid_config))
 
 @pytest.mark.asyncio
-async def test_emergency_shutdown_persistence(emergency_manager):
+async def test_emergency_shutdown_persistence(emergency_manager: EmergencyManager) -> None:
     """Test persistence of emergency state during shutdown."""
     await emergency_manager.emergency_shutdown()
     
@@ -154,7 +147,7 @@ async def test_emergency_shutdown_persistence(emergency_manager):
     assert new_manager.position_limits == {}
 
 @pytest.mark.asyncio
-async def test_system_health_monitoring(emergency_manager):
+async def test_system_health_monitoring(emergency_manager: EmergencyManager) -> None:
     """Test system health monitoring during operations."""
     # Test normal operation
     health_before = emergency_manager.get_system_health()
@@ -170,15 +163,15 @@ async def test_system_health_monitoring(emergency_manager):
     health_restored = emergency_manager.get_system_health()
     assert health_restored['emergency_mode'] is False
 
-def test_invalid_position_limits(emergency_manager):
+def test_invalid_position_limits(emergency_manager: EmergencyManager) -> None:
     """Test handling of invalid position limits."""
     with pytest.raises(ValueError):
         emergency_manager.update_position_limits({
-            'BTC-USD': -1.0  # Negative value should raise error
+            'BTC-USD': Decimal('-1.0')  # Negative value should raise error
         })
 
 @pytest.mark.asyncio
-async def test_verify_system_health(emergency_manager):
+async def test_verify_system_health(emergency_manager: EmergencyManager) -> None:
     """Test system health verification."""
     # Test with all necessary data
     assert await emergency_manager._verify_system_health() is True
@@ -194,7 +187,7 @@ from datetime import datetime, timezone
 from ...src.trading.emergency_manager import EmergencyManager
 
 @pytest.fixture
-def emergency_config():
+def emergency_config() -> Dict[str, Any]:
     """Test configuration for emergency shutdown"""
     return {
         'max_positions': {
@@ -208,12 +201,12 @@ def emergency_config():
         'emergency_thresholds': {
             'max_latency': 1000,
             'market_data_max_age': 60,
-            'min_available_funds': 1000.0
+            'min_available_funds': Decimal('1000.0')
         }
     }
 
 @pytest.mark.asyncio
-async def test_get_system_health(emergency_config):
+async def test_get_system_health(emergency_config: Dict[str, Any]) -> None:
     """Test system health check during normal operation"""
     manager = EmergencyManager(emergency_config)
     health = await manager.get_system_health()
@@ -222,7 +215,7 @@ async def test_get_system_health(emergency_config):
     assert 'metrics' in health
 
 @pytest.mark.asyncio
-async def test_emergency_shutdown_persistence(emergency_config):
+async def test_emergency_shutdown_persistence(emergency_config: Dict[str, Any]) -> None:
     """Test emergency state persistence"""
     manager = EmergencyManager(emergency_config)
     
@@ -235,7 +228,7 @@ async def test_emergency_shutdown_persistence(emergency_config):
     assert new_manager.emergency_shutdown is True
 
 @pytest.mark.asyncio
-async def test_system_health_monitoring(emergency_config):
+async def test_system_health_monitoring(emergency_config: Dict[str, Any]) -> None:
     """Test health monitoring triggers"""
     manager = EmergencyManager(emergency_config)
     
@@ -245,19 +238,19 @@ async def test_system_health_monitoring(emergency_config):
     assert health['status'] == 'warning'
 
 @pytest.mark.asyncio
-async def test_invalid_position_limits(emergency_config):
+async def test_invalid_position_limits(emergency_config: Dict[str, Any]) -> None:
     """Test position limit validation"""
     manager = EmergencyManager(emergency_config)
     
     with pytest.raises(ValueError):
         await manager.validate_new_position(
             trading_pair="BTC-USD",
-            size=-1.0,
-            price=50000.0
+            size=Decimal('-1.0'),
+            price=Decimal('50000.0')
         )
 
 @pytest.mark.asyncio
-async def test_verify_system_health(emergency_config):
+async def test_verify_system_health(emergency_config: Dict[str, Any]) -> None:
     """Test system health verification"""
     manager = EmergencyManager(emergency_config)
     status = await manager.verify_system_health()

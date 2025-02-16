@@ -19,6 +19,14 @@ from .utils import (
     test_env_config
 )
 
+"""Base test fixtures and utilities"""
+from decimal import Decimal
+from datetime import datetime
+
+from crypto_j_trader.src.trading.config_manager import ConfigManager
+from crypto_j_trader.src.trading.order_executor import OrderExecutor
+from crypto_j_trader.src.trading.trading_core import TradingBot
+
 def pytest_configure(config):
     """Configure pytest with custom settings and markers."""
     # Register custom markers
@@ -90,6 +98,77 @@ def emergency_config():
             "state_save_interval": 300
         }
     }
+
+@pytest.fixture(scope="session")
+def config_manager():
+    """Provide ConfigManager instance for tests"""
+    return ConfigManager()
+
+@pytest.fixture(scope="function")
+def test_config(config_manager) -> Dict[str, Any]:
+    """Provide test configuration"""
+    return config_manager.get_test_config()
+
+@pytest.fixture(scope="function")
+def order_executor(test_config) -> OrderExecutor:
+    """Provide OrderExecutor instance configured for testing"""
+    trading_pair = test_config['trading_pairs'][0]  # Use first pair by default
+    return OrderExecutor(
+        trading_pair=trading_pair,
+        mock_mode=True
+    )
+
+@pytest.fixture(scope="function")
+def trading_bot(test_config, order_executor) -> TradingBot:
+    """Provide TradingBot instance configured for testing"""
+    bot = TradingBot(config=test_config)
+    bot.order_executor = order_executor
+    return bot
+
+@pytest.fixture(scope="function")
+def initialize_test_position(order_executor):
+    """Helper fixture to initialize a test position"""
+    async def _initialize(symbol: str, size: Decimal, price: Decimal):
+        await order_executor.execute_order(
+            side="buy",
+            size=float(size),
+            price=float(price),
+            symbol=symbol
+        )
+    return _initialize
+
+def verify_position_info(position: Dict[str, Any]) -> None:
+    """Verify position info structure"""
+    required_fields = {
+        'size': Decimal,
+        'entry_price': Decimal,
+        'unrealized_pnl': Decimal,
+        'timestamp': datetime,
+        'stop_loss': Decimal
+    }
+    
+    for field, expected_type in required_fields.items():
+        assert field in position, f"Missing required field: {field}"
+        assert isinstance(position[field], expected_type), f"Field {field} has wrong type"
+
+def verify_order_response(response: Dict[str, Any]) -> None:
+    """Verify order response structure"""
+    required_fields = {
+        'status': str,
+        'order_id': str,
+        'symbol': str,
+        'side': str,
+        'size': str,
+        'price': str,
+        'type': str,
+        'timestamp': str
+    }
+    
+    for field, expected_type in required_fields.items():
+        assert field in response, f"Missing required field: {field}"
+        assert isinstance(response[field], expected_type), f"Field {field} has wrong type"
+    
+    assert response['status'] in ('filled', 'error', 'success'), f"Invalid status: {response['status']}"
 
 # Re-export fixtures from utils
 __all__ = [
