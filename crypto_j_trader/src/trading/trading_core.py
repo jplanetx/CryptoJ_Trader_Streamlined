@@ -25,7 +25,7 @@ from datetime import datetime
 import logging
 
 from .config_manager import ConfigManager
-from .paper_trading import PaperTradingExecutor
+from .paper_trading import PaperTrader  # Updated to use new class name
 from .order_executor import OrderExecutor, OrderResponse
 
 logger = logging.getLogger(__name__)
@@ -49,7 +49,7 @@ class TradingBot:
             use_paper_trading = bool(paper_trading_config)
             
         if use_paper_trading:
-            self.order_executor = PaperTradingExecutor(trading_pair=self.trading_pair)
+            self.order_executor = PaperTrader(trading_pair=self.trading_pair)  # Updated to use new class name
         else:
             self.order_executor = OrderExecutor(trading_pair=self.trading_pair)
             

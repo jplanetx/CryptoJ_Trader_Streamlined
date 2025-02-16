@@ -183,3 +183,92 @@ __all__ = [
     'test_config_path',
     'emergency_config'
 ]
+
+"""Configure test fixtures"""
+import os
+import pytest
+from decimal import Decimal
+from typing import Dict, Any
+from crypto_j_trader.src.trading.order_execution import OrderExecutor
+from crypto_j_trader.src.trading.paper_trading import PaperTrader
+from crypto_j_trader.src.trading.market_data_handler import MarketDataHandler
+
+class MockMarketData(MarketDataHandler):
+    """Mock market data handler for testing"""
+    def __init__(self):
+        self.price_feed = {
+            "BTC-USD": Decimal("50000"),
+            "ETH-USD": Decimal("2000")
+        }
+        self.price_history = {
+            "BTC-USD": [
+                Decimal("49800"),
+                Decimal("49900"),
+                Decimal("50000"),
+                Decimal("50100"),
+                Decimal("50200")
+            ],
+            "ETH-USD": [
+                Decimal("1980"),
+                Decimal("1990"),
+                Decimal("2000"),
+                Decimal("2010"),
+                Decimal("2020")
+            ]
+        }
+        
+    def get_current_price(self, trading_pair: str) -> Decimal:
+        """Get current price from mock data"""
+        return self.price_feed.get(trading_pair)
+    
+    def get_price_history(self, symbol: str, period: str = '5m') -> list:
+        """Get historical prices for volatility calculation"""
+        return self.price_history.get(symbol, [])
+
+@pytest.fixture
+def test_config() -> Dict[str, Any]:
+    """Create test configuration for trading system"""
+    return {
+        'api_key': 'test_api_key',
+        'api_secret': 'test_api_secret',
+        'timeout': 30,
+        'paper_trading': {
+            'enabled': True,
+            'initial_balance': 100000.0,
+            'simulate_slippage': True,
+            'slippage_pct': 0.001
+        },
+        'trading_pairs': ['BTC-USD', 'ETH-USD'],
+        'risk_management': {
+            'max_position_size': 5.0,
+            'stop_loss_pct': 0.05,
+            'max_drawdown': 0.2,
+            'daily_loss_limit': 1000.0
+        },
+        'market_data': {
+            'update_interval': '1s',
+            'history_length': '1h'
+        }
+    }
+
+@pytest.fixture
+def trading_system(test_config):
+    """Create trading system with mock components"""
+    market_data = MockMarketData()
+    trader = PaperTrader(market_data, trading_pair="BTC-USD")
+    return {
+        "trader": trader,
+        "market_data": market_data,
+        "config": test_config
+    }
+
+@pytest.fixture
+def multi_asset_trading_system(test_config):
+    """Set up trading system for multi-asset trading"""
+    market_data = MockMarketData()
+    trader = PaperTrader(market_data, trading_pair="BTC-USD")
+    return {
+        "market_data": market_data,
+        "trader": trader,
+        "config": test_config
+    }
